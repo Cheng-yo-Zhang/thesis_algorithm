@@ -16,6 +16,9 @@ class EVRequest:
     urgency: int            # 優先級 (1-3)
     zone_type: str = "Urban" # 預設為市區，新增此欄位以支援異質場景分析
 
+    charge_type: str = "FAST"
+    resource_fit: str = "TypeB"
+
     # 新增此方法：將物件轉換為字典，以便存入 JSON
     def to_dict(self):
         return asdict(self)

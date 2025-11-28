@@ -79,4 +79,5 @@ deactivate
 #### 移除虛擬環境
 ```bash=
 rmdir venv
+python -m src.generator
 ```
