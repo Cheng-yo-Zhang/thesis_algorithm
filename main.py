@@ -70,44 +70,37 @@ def move_charger_towards_target(charger, target_x, target_y):
     charger.x = np.clip(charger.x, 0, settings.GRID_SIZE)
     charger.y = np.clip(charger.y, 0, settings.GRID_SIZE)
 
+# main.py
+
 def dispatch_and_move_mcs(chargers, requests, cluster_model):
     """
-    核心調度與移動邏輯：
-    1. 篩選需求 (Fast / Slow)
-    2. 使用 K-Means 計算重心 (Targets)
-    3. 指揮 MCS 移動到重心
+    修正後的調度邏輯：
+    只有一種 MCS 車隊，同時服務 FAST_MCS 與 SLOW_MCS 兩種類型的需求。
     """
     
-    # --- A. 準備資料 ---
-    # 篩選出 Fast 和 Slow 的需求點
-    fast_reqs = [r for r in requests if r.req_type == 'FAST_MCS']
-    slow_reqs = [r for r in requests if r.req_type == 'SLOW_MCS']
+    # 1. 篩選需求：找出所有需要 MCS 服務的需求 (包含 Fast 和 Slow)
+    # 雖然需求有分快慢模式，但在移動調度上，它們都是 MCS 的潛在目標
+    ground_requests = [
+        r for r in requests 
+        if r.req_type in ['FAST_MCS', 'SLOW_MCS']
+    ]
     
-    # 篩選出對應的 MCS 車隊
-    fast_mcs_fleet = [c for c in chargers if c.type == 'FastMCS']
-    slow_mcs_fleet = [c for c in chargers if c.type == 'SlowMCS']
+    # 2. 篩選車隊：找出所有類型為 'MCS' 的充電車
+    mcs_fleet = [c for c in chargers if c.type == 'MCS']
     
-    # --- B. 計算 FastMCS 的目標重心 ---
-    if fast_mcs_fleet:
-        # 計算 K 個重心 (K = 車隊數量，讓每台車都有地方去)
-        # 如果需求很少，重心數量會自動縮減 (在 ClusterModel 裡處理)
-        targets = cluster_model.get_cluster_centroids(fast_reqs, len(fast_mcs_fleet))
+    # 3. 統一調度
+    if mcs_fleet and ground_requests:
+        # 計算重心：將所有需求視為一體，計算出適合車隊停靠的 K 個位置
+        targets = cluster_model.get_cluster_centroids(ground_requests, len(mcs_fleet))
         
-        # 簡單指派：第 i 台車去第 i 個重心 (若重心不夠，就去最後一個)
-        for i, mcs in enumerate(fast_mcs_fleet):
+        # 指派移動
+        for i, mcs in enumerate(mcs_fleet):
             if targets:
-                # 取模運算確保不會 index out of range (當重心數 < 車數時)
+                # 簡單指派：第 i 台車去第 i 個重心
                 target = targets[i % len(targets)]
                 move_charger_towards_target(mcs, target[0], target[1])
-            # 若完全無需求 (targets為空)，MCS 留在原地或可設定返回 Depot
-
-    # --- C. 計算 SlowMCS 的目標重心 ---
-    if slow_mcs_fleet:
-        targets = cluster_model.get_cluster_centroids(slow_reqs, len(slow_mcs_fleet))
-        for i, mcs in enumerate(slow_mcs_fleet):
-            if targets:
-                target = targets[i % len(targets)]
-                move_charger_towards_target(mcs, target[0], target[1])
+    
+    # 若沒有需求，MCS 則維持原地或執行其他閒置邏輯
 
 def main():
     print("=== Simulation Started ===")

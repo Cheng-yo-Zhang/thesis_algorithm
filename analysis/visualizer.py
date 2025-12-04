@@ -10,12 +10,6 @@ def plot_scenario_snapshot(requests, chargers, time_slot, traffic, filename):
     plt.ylim(0, settings.GRID_SIZE)
     plt.grid(True, linestyle='--', alpha=0.5)
 
-    # 1. 畫熱區圈圈 (背景)
-    ax = plt.gca()
-    for z in settings.GENERATION_HOT_ZONES:
-        circle = plt.Circle(z['center'], z['sigma']*2, color='gray', alpha=0.1)
-        ax.add_patch(circle)
-
     # 2. 畫車隊位置 (驗證動態偏遠)
     for c in chargers:
         if 'UAV' in c.type:

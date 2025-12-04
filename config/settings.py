@@ -23,8 +23,8 @@ TARGET_CHARGING_PERCENT = 0.40
 AMOUNT_NEEDED_PER_CHARGE = EV_BATTERY_CAPACITY * TARGET_CHARGING_PERCENT # 36.0 kWh [cite: 128]
 
 # 時間窗定義 (分鐘)
-TIME_WINDOW_FAST = (10, 60)    
-TIME_WINDOW_SLOW = (240, 480)  
+TIME_WINDOW_FAST = (30, 90)
+TIME_WINDOW_SLOW = (480, 720)
 
 REQUEST_THRESHOLD_SOC = 0.20  # [cite: 127]
 
@@ -39,19 +39,12 @@ CHARGER_CONFIG = {
         'power': 120.0,        
         'movement_type': 'euclidean', 
     },
-    'FastMCS': {
-        'count': 10,
+    'MCS': {
+        'count': 25,
         'speed': 12.0,         # [cite: 480]
         'capacity': 270.0,     # [cite: 480]
         'power': 330.0,        # [cite: 480]
         'movement_type': 'manhattan', 
-    },
-    'SlowMCS': {
-        'count': 15,
-        'speed': 10.0,         
-        'capacity': 300.0,     
-        'power': 60.0,         
-        'movement_type': 'manhattan',
     }
 }
 
@@ -59,13 +52,3 @@ CHARGER_CONFIG = {
 # 4. 判定邏輯閾值
 # ==========================================
 REMOTE_DISTANCE_THRESHOLD = 40  # 曼哈頓距離閾值
-
-# ==========================================
-# 5. 生成分佈設定
-# ==========================================
-GENERATION_HOT_ZONES = [
-    {'center': (30, 30), 'sigma': 15}, 
-    {'center': (70, 70), 'sigma': 15}
-]
-PROB_GENERATION_IN_HOT = 0.7 
-PROB_SHORT_STAY = 0.6
