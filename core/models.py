@@ -22,6 +22,14 @@ class Request:
         # 或是之後在 main.py 裡動態計算。目前先用 generator 產生的屬性。
         self.due_time = 0 
 
+    @property
+    def energy_demand(self):
+        """計算需要充電的能量 (kWh)"""
+        # 從當前 SOC 充到目標百分比所需的能量
+        target_soc = self.soc + settings.TARGET_CHARGING_PERCENT
+        target_soc = min(target_soc, 1.0)  # 不超過 100%
+        return (target_soc - self.soc) * settings.EV_BATTERY_CAPACITY
+
     def __repr__(self):
         status = "Done" if self.is_served else "Pending"
         return f"<Req {self.id} | {self.req_type} | {status}>"
@@ -45,6 +53,7 @@ class Charger:
         self.speed = cfg['speed']
         self.capacity = cfg['capacity']
         self.power = cfg['power']
+        self.current_charging_power = 0.0
         self.move_mode = cfg['movement_type']
         
         self.current_energy = self.capacity

@@ -19,7 +19,7 @@ TOTAL_EVS = 500            # [cite: 480]
 EV_SPEED = 15.0            # 15 m/s [cite: 480]
 EV_BATTERY_CAPACITY = 90.0 # 90 kWh [cite: 480]
 
-TARGET_CHARGING_PERCENT = 0.40 
+TARGET_CHARGING_PERCENT = 0.40
 AMOUNT_NEEDED_PER_CHARGE = EV_BATTERY_CAPACITY * TARGET_CHARGING_PERCENT # 36.0 kWh [cite: 128]
 
 # 時間窗定義 (分鐘)
@@ -31,6 +31,9 @@ REQUEST_THRESHOLD_SOC = 0.20  # [cite: 127]
 # ==========================================
 # 3. 異質充電資源配置
 # ==========================================
+MCS_POWER_MAX = 350.0
+MCS_POWER_SLOW = 7.0
+
 CHARGER_CONFIG = {
     'UAV': {
         'count': 5,            
@@ -43,7 +46,7 @@ CHARGER_CONFIG = {
         'count': 25,
         'speed': 12.0,         # [cite: 480]
         'capacity': 270.0,     # [cite: 480]
-        'power': 330.0,        # [cite: 480]
+        'power': 330.0,        # [cite: 480]kw/h
         'movement_type': 'manhattan', 
     }
 }

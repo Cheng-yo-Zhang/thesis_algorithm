@@ -35,6 +35,16 @@ def process_fleet_movement(chargers):
     處理所有充電車的移動邏輯 (每個 Time Slot 呼叫一次)
     """
     for c in chargers:
+        if c.status == 'SERVING':
+            c.service_timer -= 1
+            power_used = c.current_charging_power
+            energy_delivered = power_used * (settings.TIME_SLOT_DURATION / 3600.0)
+            c.current_energy -= energy_delivered
+            if c.service_timer <= 0 or c.current_energy <= 0:
+                c.status = 'IDLE'
+                c.service_timer = 0
+                c.current_charging_power = 0.0 # 歸零
+            continue
         if c.status == 'MOVING' and c.target_x is not None:
             # 1. 計算距離
             dist_meters = c.speed * settings.TIME_SLOT_DURATION
@@ -101,8 +111,17 @@ def dispatch_logic(current_time, chargers, pending_requests, cluster_model):
     assigned_indices = set()
     
     for cx, cy in centroids:
+        cluster_reqs = []
+        for r in pending_requests:
+            if abs(r.x - cx) + abs(r.y - cy) < 5.0:
+                cluster_reqs.append(r)
+        
+        if not cluster_reqs: continue
+        representative_req = sorted(cluster_reqs, key=lambda x: x.due_time)[0]
+        is_fast_mode = (representative_req.req_type == 'FAST_MCS')
         best_mcs = None
         min_dist = float('inf')
+        best_idx = -1
         
         # 找最近的車
         for i, mcs in enumerate(idle_mcs):
@@ -116,8 +135,23 @@ def dispatch_logic(current_time, chargers, pending_requests, cluster_model):
         
         # 指派任務
         if best_mcs:
+            total_energy_needed = sum(r.energy_demand for r in cluster_reqs)
+            if is_fast_mode:
+                charging_power = settings.MCS_POWER_MAX # 330 kW
+                required_hours = total_energy_needed / charging_power
+            else:
+                charging_power = settings.MCS_POWER_SLOW # 22 kW
+                avg_stay = np.mean([r.stay_duration for r in cluster_reqs]) / 60.0 # 小時
+                min_required_power = total_energy_needed / (avg_stay + 0.01)
+                charging_power = max(settings.MCS_POWER_SLOW, min_required_power)
+                charging_power = min(charging_power, settings.MCS_POWER_MAX)
+                required_hours = total_energy_needed / charging_power
+            required_slots = int(np.ceil(required_hours * 60))
             best_mcs.set_target(cx, cy)
+            best_mcs.current_charging_power = charging_power # [設定] 寫入當前功率
+            best_mcs.next_service_duration = required_slots
             assigned_indices.add(best_idx)
+            mode_str = "FAST" if is_fast_mode else "SLOW"
             # print(f"[Dispatch] Time {current_time}: MCS {best_mcs.id} -> ({cx:.1f}, {cy:.1f})")
 
 def main():
