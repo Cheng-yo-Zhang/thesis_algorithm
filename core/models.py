@@ -10,13 +10,21 @@ class Request:
         self.stay_duration = stay_duration
         self.traffic_val = traffic_val
         
-        # 分類結果 (由 generator 填入)
-        self.req_type = None   # 'URGENT_UAV', 'FAST_MCS', 'SLOW_MCS'
+        # 分類結果
+        self.req_type = None
         self.max_tolerance = 0 
-        self.note = ""         # 備註 (例如: Remote)
+        self.note = ""
+
+        # [新增] 狀態追蹤
+        self.is_served = False 
+        # 計算 Urgency 用 (Deadline = Generate Time + Tolerance)
+        # 這裡為了簡化，我們先在 Generator 賦予它一個具體的 due_time，
+        # 或是之後在 main.py 裡動態計算。目前先用 generator 產生的屬性。
+        self.due_time = 0 
 
     def __repr__(self):
-        return f"<Req {self.id} | {self.req_type} | Loc:({self.x:.1f},{self.y:.1f})>"
+        status = "Done" if self.is_served else "Pending"
+        return f"<Req {self.id} | {self.req_type} | {status}>"
 
 class Charger:
     def __init__(self, charger_id, start_x, start_y, type_name):
@@ -24,16 +32,34 @@ class Charger:
         self.type = type_name
         self.x = start_x
         self.y = start_y
-        self.status = 'IDLE' # IDLE, MOVING, CHARGING
         
-        # 從設定檔讀取規格
+        # [修改] 狀態機擴充
+        # IDLE: 閒置, MOVING: 移動中, SERVING: 服務中
+        self.status = 'IDLE' 
+        
+        # [新增] 導航目標
+        self.target_x = None
+        self.target_y = None
+        
         cfg = settings.CHARGER_CONFIG[type_name]
         self.speed = cfg['speed']
         self.capacity = cfg['capacity']
         self.power = cfg['power']
         self.move_mode = cfg['movement_type']
         
-        self.current_energy = self.capacity # 初始滿電
+        self.current_energy = self.capacity
+
+    def set_target(self, x, y):
+        """指派移動目標"""
+        self.target_x = x
+        self.target_y = y
+        self.status = 'MOVING'
+
+    def clear_target(self):
+        """清除目標 (到達或取消)"""
+        self.target_x = None
+        self.target_y = None
+        self.status = 'IDLE'
 
     def __repr__(self):
-        return f"<{self.type} #{self.id} at ({self.x:.1f}, {self.y:.1f})>"
+        return f"<{self.type} #{self.id} | {self.status} | SoC:{self.current_energy:.1f}>"
