@@ -21,8 +21,10 @@ class RequestGenerator:
         return min_dist
 
     def generate_requests(self, time_slot, chargers, poisson_lambda=25):
+        lambda_per_minute = poisson_lambda / 60.0
         # 泊松分佈決定數量
-        num_requests = max(5, min(50, np.random.poisson(poisson_lambda)))
+        num_requests = np.random.poisson(lambda_per_minute)
+        num_requests = min(10, num_requests) # 上限設個 10 就很多了
         
         # 隨機生成全域路況 (30% 機率塞車)
         current_traffic = np.random.uniform(0.5, 1.5) if np.random.random() < 0.3 else 0.0
