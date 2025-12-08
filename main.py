@@ -41,6 +41,10 @@ def process_fleet_movement(chargers):
             energy_delivered = power_used * (settings.TIME_SLOT_DURATION / 3600.0)
             c.current_energy -= energy_delivered
             if c.service_timer <= 0 or c.current_energy <= 0:
+                for r in c.assigned_requests:
+                    r.status = 'COMPLETED'
+                c.assigned_requests = [] # 清空手上的單
+
                 c.status = 'IDLE'
                 c.service_timer = 0
                 c.current_charging_power = 0.0 # 歸零
@@ -59,7 +63,19 @@ def process_fleet_movement(chargers):
                 # 到達目的地
                 c.x = c.target_x
                 c.y = c.target_y
-                c.clear_target() # 變回 IDLE，等待服務或下一次指派
+
+                if c.next_service_duration > 0:
+                    c.status = 'SERVING'  # 切換狀態！
+                    c.service_timer = c.next_service_duration # 設定計時器
+                    c.next_service_duration = 0 # 重置緩衝
+
+                    for r in c.assigned_requests:
+                        r.status = 'SERVING'
+                    
+                    c.target_x = None
+                    c.target_y = None
+                else:
+                    c.clear_target()
                 
                 # [模擬] 到達後扣除一點移動耗電 (簡化)
                 c.current_energy -= 0.5 
@@ -77,134 +93,109 @@ def process_fleet_movement(chargers):
             if c.current_energy < 0: c.current_energy = 0
 
 def dispatch_logic(current_time, chargers, pending_requests, cluster_model):
-    """
-    核心調度邏輯：
-    1. 篩選 IDLE 車輛
-    2. 篩選緊急需求
-    3. 分群與指派
-    """
+    # 篩選還沒被服務的單
+    valid_pending = [r for r in pending_requests if r.status == 'PENDING']
     
-    # A. 找出閒置且有電的 MCS (UAV 暫不在此邏輯)
-    idle_mcs = [
-        c for c in chargers 
-        if c.type == 'MCS' and c.status == 'IDLE' and c.current_energy > 50 # 電量閾值
-    ]
+    # 篩選閒置 MCS
+    idle_mcs = [c for c in chargers if c.type == 'MCS' and c.status == 'IDLE' and c.current_energy > 50]
     
-    if not idle_mcs or not pending_requests:
-        return # 沒車或沒單，收工
+    if not idle_mcs or not valid_pending:
+        return []
 
-    # B. 需求處理 (Queueing)
-    # 這裡可以加入時間窗過濾：只處理快要到期的 (DueTime - CurrentTime < Threshold)
-    # 目前先簡單處理：處理所有 Pending
-    target_requests = pending_requests 
+    # 1. 取得分群 (演算法內部已經處理了容量與偏遠判定)
+    clusters_info = cluster_model.get_capacitated_clusters(valid_pending)
+    
+    centroids_for_plot = []
+    
+    # 2. 指派
+    num_to_assign = min(len(idle_mcs), len(clusters_info))
+    
+    for i in range(num_to_assign):
+        cluster = clusters_info[i]
+        mcs = idle_mcs[i]
+        
+        cx, cy = cluster['centroid']
+        reqs = cluster['requests']
+        total_energy = cluster['total_energy']
+        
+        # 設定 MCS
+        mcs.set_target(cx, cy)
+        mcs.assigned_requests = reqs
+        
+        # 標記 Request
+        for r in reqs:
+            r.status = 'ASSIGNED'
+        
+        # 估算時間
+        charging_power = settings.MCS_POWER_MAX
+        required_hours = total_energy / charging_power
+        mcs.next_service_duration = int(np.ceil(required_hours * 60)) + 10 # +10分鐘緩衝
+        mcs.current_charging_power = charging_power
+        
+        centroids_for_plot.append((cx, cy))
 
-    # C. 決定分群數量 K (Demand-Driven)
-    # K 不能超過閒置車輛數，也不能超過需求數
-    # 策略：有多少閒置車，就盡量服務多少群 (或是需求少時，就只分需求數量的群)
-    n_clusters = min(len(idle_mcs), len(target_requests))
-    
-    # D. 計算重心
-    centroids = cluster_model.get_cluster_centroids(target_requests, n_clusters)
-    
-    # E. 媒合 (Matching) - 簡單貪婪法
-    # 將每個重心指派給最近的 IDLE MCS
-    assigned_indices = set()
-    
-    for cx, cy in centroids:
-        cluster_reqs = []
-        for r in pending_requests:
-            if abs(r.x - cx) + abs(r.y - cy) < 5.0:
-                cluster_reqs.append(r)
-        
-        if not cluster_reqs: continue
-        representative_req = sorted(cluster_reqs, key=lambda x: x.due_time)[0]
-        is_fast_mode = (representative_req.req_type == 'FAST_MCS')
-        best_mcs = None
-        min_dist = float('inf')
-        best_idx = -1
-        
-        # 找最近的車
-        for i, mcs in enumerate(idle_mcs):
-            if i in assigned_indices: continue
-            
-            dist = abs(mcs.x - cx) + abs(mcs.y - cy)
-            if dist < min_dist:
-                min_dist = dist
-                best_mcs = mcs
-                best_idx = i
-        
-        # 指派任務
-        if best_mcs:
-            total_energy_needed = sum(r.energy_demand for r in cluster_reqs)
-            if is_fast_mode:
-                charging_power = settings.MCS_POWER_MAX # 330 kW
-                required_hours = total_energy_needed / charging_power
-            else:
-                charging_power = settings.MCS_POWER_SLOW # 22 kW
-                avg_stay = np.mean([r.stay_duration for r in cluster_reqs]) / 60.0 # 小時
-                min_required_power = total_energy_needed / (avg_stay + 0.01)
-                charging_power = max(settings.MCS_POWER_SLOW, min_required_power)
-                charging_power = min(charging_power, settings.MCS_POWER_MAX)
-                required_hours = total_energy_needed / charging_power
-            required_slots = int(np.ceil(required_hours * 60))
-            best_mcs.set_target(cx, cy)
-            best_mcs.current_charging_power = charging_power # [設定] 寫入當前功率
-            best_mcs.next_service_duration = required_slots
-            assigned_indices.add(best_idx)
-            mode_str = "FAST" if is_fast_mode else "SLOW"
-            # print(f"[Dispatch] Time {current_time}: MCS {best_mcs.id} -> ({cx:.1f}, {cy:.1f})")
+    return centroids_for_plot
 
 def main():
-    print("=== Simulation Started (Refined Logic) ===")
+    print("=== Simulation Started (Capacitated Clustering Mode) ===")
     
     chargers = initialize_chargers()
     generator = RequestGenerator()
     cluster_model = ClusterModel()
     
-    # [新增] 全域待處理清單
-    all_pending_requests = [] 
-
-    for t in range(settings.TOTAL_TIME_SLOTS):
+    current_sim_time = 0 
+    
+    for traffic_slot in range(settings.TOTAL_TIME_SLOTS):
         
-        # 1. 生成新需求 (Generate)
-        # 這裡要注意 generator 回傳的是"這一刻新增的"，不是所有的
-        new_requests, traffic = generator.generate_requests(t, chargers)
-        
-        # 為新需求加上時間標記 (如果 generator 沒加，這裡補)
-        for r in new_requests:
-            r.due_time = t + r.max_tolerance # 設定最後期限
-            all_pending_requests.append(r)
+        if traffic_slot == 0:
+            continue
             
-        # 2. 清理過期或已完成的需求 (Clean up)
-        # 這裡簡化：假設只要 MCS 到達附近，需求就被視為「將被服務」，從 pending 移除
-        # 實際邏輯應該更複雜 (MCS status = SERVING)，但為了讓調度流暢，我們先這樣做
-        valid_requests = []
-        for r in all_pending_requests:
-            # 簡單判定：如果有 MCS 在它附近 (例如 1km 內)，算已服務
-            is_covered = any(
-                c for c in chargers 
-                if c.type == 'MCS' and np.sqrt((c.x-r.x)**2 + (c.y-r.y)**2) < 2.0
-            )
-            if not is_covered and t < r.due_time:
-                valid_requests.append(r)
-        
-        all_pending_requests = valid_requests
-
-        # 3. 執行調度 (Dispatch) - 針對還在 pending 的需求
-        # 設定頻率：例如每 10 分鐘調度一次，或是隨時調度
-        if t % 10 == 0: 
-            dispatch_logic(t, chargers, all_pending_requests, cluster_model)
-        
-        # 4. 物理移動 (Move)
-        process_fleet_movement(chargers)
-        
-        # 5. 輸出快照 (Snapshot)
-        if t % 60 == 0:
-            print(f"Time {t:04d} | Pending Reqs: {len(all_pending_requests)} | Idle MCS: {len([c for c in chargers if c.type=='MCS' and c.status=='IDLE'])}")
+        # 1. 生成需求
+        new_requests, traffic = generator.generate_requests(traffic_slot, chargers)
+        if not new_requests:
+            continue
             
-            # 繪圖時傳入 all_pending_requests 才能看到累積的需求
-            filename = os.path.join(OUTPUT_DIR, f"snapshot_t{t:04d}.png")
-            plot_scenario_snapshot(all_pending_requests, chargers, t, traffic, filename)
+        print(f"\n[Batch {traffic_slot}] Incoming Reqs: {len(new_requests)}")
+        batch_requests = new_requests
+        # 初始化狀態
+        for r in batch_requests: 
+            r.status = 'PENDING'
+            r.due_time = 999999 # Batch 模式下忽略 deadline
+
+        # 2. 進入服務迴圈 (直到這批做完)
+        # 注意：因為可能車少單多，我們可能要在迴圈內多次分群
+        
+        plot_done = False # 控制只畫第一張規劃圖
+
+        while any(r.status != 'COMPLETED' for r in batch_requests):
+
+            for r in batch_requests:
+                if r.status == 'PENDING' and r.req_type == 'URGENT_UAV':
+                    r.status = 'COMPLETED' # 或標記為 'HANDOVER' 視同離開此系統
+                    print(f"   -> [System] Req {r.id} is Remote (UAV). Handover & Close.")
+            
+            # (A) 檢查是否需要調度
+            # 條件：有 PENDING 的單 且 有 IDLE 的車
+            pending_count = sum(1 for r in batch_requests if r.status == 'PENDING')
+            idle_mcs_count = sum(1 for c in chargers if c.type == 'MCS' and c.status == 'IDLE')
+            
+            if pending_count > 0 and idle_mcs_count > 0:
+                # 再次分群並派車
+                centroids = dispatch_logic(current_sim_time, chargers, batch_requests, cluster_model)
+                
+                # 繪圖：只在每個 Batch 第一次派車時畫，或者每次派車都畫
+                # 這裡設定：每個 Batch 的第一次規劃畫一張圖
+                if not plot_done and centroids:
+                    filename = os.path.join(OUTPUT_DIR, f"plan_batch_{traffic_slot:04d}.png")
+                    plot_scenario_snapshot(batch_requests, chargers, current_sim_time, traffic, filename, centroids=centroids)
+                    print(f"   -> Plan plotted: {filename}")
+                    plot_done = True
+
+            # (B) 物理移動與服務
+            process_fleet_movement(chargers)
+            current_sim_time += 1
+
+        print(f"[Batch {traffic_slot}] All Cleared at Sim Time {current_sim_time}")
 
     print("=== Simulation Finished ===")
 

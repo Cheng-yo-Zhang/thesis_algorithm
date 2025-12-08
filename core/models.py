@@ -21,6 +21,7 @@ class Request:
         # 這裡為了簡化，我們先在 Generator 賦予它一個具體的 due_time，
         # 或是之後在 main.py 裡動態計算。目前先用 generator 產生的屬性。
         self.due_time = 0 
+        self.status = 'PENDING'
 
     @property
     def energy_demand(self):
@@ -57,6 +58,8 @@ class Charger:
         self.move_mode = cfg['movement_type']
         
         self.current_energy = self.capacity
+        self.next_service_duration = 0
+        self.assigned_requests = []
 
     def set_target(self, x, y):
         """指派移動目標"""
