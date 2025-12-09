@@ -1,203 +1,316 @@
-# main.py
-import os
-import numpy as np
+import random
+import json
+import math
+from typing import List, Dict, Any, Optional
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 
-from config import settings
-from core.models import Charger
-from simulation.generator import RequestGenerator
-from analysis.visualizer import plot_scenario_snapshot
-from algorithms.clustering import ClusterModel
 
-OUTPUT_DIR = "results"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-def initialize_chargers():
-    chargers = []
-    c_id = 0
-    for type_name, cfg in settings.CHARGER_CONFIG.items():
-        count = cfg['count']
-        for _ in range(count):
-            new_charger = Charger(
-                charger_id=c_id,
-                start_x=settings.DEPOT_LOCATION[0],
-                start_y=settings.DEPOT_LOCATION[1],
-                type_name=type_name
-            )
-            chargers.append(new_charger)
-            c_id += 1
-    return chargers
-
-def process_fleet_movement(chargers):
+class VRPDataGenerator:
     """
-    處理所有充電車的移動邏輯 (每個 Time Slot 呼叫一次)
+    VRP 資料生成器：生成包含 MCS 和 UAV 混合車隊的車輛路徑問題測試案例。
+    
+    Attributes:
+        map_size: 地圖大小 (km)
+        num_requests: 客戶需求數量
     """
-    for c in chargers:
-        if c.status == 'SERVING':
-            c.service_timer -= 1
-            power_used = c.current_charging_power
-            energy_delivered = power_used * (settings.TIME_SLOT_DURATION / 3600.0)
-            c.current_energy -= energy_delivered
-            if c.service_timer <= 0 or c.current_energy <= 0:
-                for r in c.assigned_requests:
-                    r.status = 'COMPLETED'
-                c.assigned_requests = [] # 清空手上的單
+    
+    # ==================== 常數定義 ====================
+    # 時間常數 (分鐘)
+    MINUTES_PER_DAY = 1440
+    WORK_START_TIME = 480   # 08:00
+    WORK_END_TIME = 1080    # 18:00
+    
+    # MCS 參數
+    SPEED_MCS = (12 * 3.6) / 60.0  # km/min
+    CAPACITY_MCS = 270             # kWh
+    POWER_FAST = 330               # kW (Super Fast Charging)
+    POWER_SLOW = 7                 # kW (AC Slow Charging)
+    
+    # UAV 參數
+    SPEED_UAV = 60 / 60.0          # 1 km/min (60 km/h)
+    CAPACITY_UAV = 15              # kWh
+    POWER_UAV_FAST = 50            # kW
+    UAV_MAX_PAYLOAD = 12.0         # kWh，無人機最大載電量
+    
+    # 機率與地形參數
+    PROB_RESTRICTED = 0.1          # 受限區域機率
+    PROB_FAST = 0.4                # 快充需求機率
+    CLUSTER_RADIUS_RATIO = 0.15    # 受限區域半徑比例
+    
+    # 服務時間附加 (分鐘)
+    SERVICE_OVERHEAD_UAV = 10.0
+    SERVICE_OVERHEAD_NORMAL = 5.0
+    
+    def __init__(self, map_size: int = 100, num_requests: Optional[int] = None, seed: Optional[int] = None):
+        """
+        初始化 VRP 資料生成器。
+        
+        Args:
+            map_size: 地圖大小 (km)，預設 100
+            num_requests: 客戶需求數量，若為 None 則隨機生成 5-50
+            seed: 隨機種子，用於結果重現
+        """
+        if seed is not None:
+            random.seed(seed)
+        
+        self.map_size = map_size
+        self.num_requests = num_requests if num_requests else random.randint(5, 50)
+        
+        if self.num_requests <= 0:
+            raise ValueError("num_requests 必須大於 0")
 
-                c.status = 'IDLE'
-                c.service_timer = 0
-                c.current_charging_power = 0.0 # 歸零
-            continue
-        if c.status == 'MOVING' and c.target_x is not None:
-            # 1. 計算距離
-            dist_meters = c.speed * settings.TIME_SLOT_DURATION
-            dist_grid = dist_meters / (settings.ROAD_LENGTH * 1000)
+        self.nodes: List[Dict[str, Any]] = []
+        self.fleet: Dict[str, Any] = {}
+        self.cluster_centers: List[tuple] = []  # 受限區域中心點
+
+    def _generate_cluster_centers(self) -> None:
+        """生成受限區域的中心點（在生成需求前調用一次）"""
+        num_clusters = random.randint(2, 5)
+        self.cluster_centers = []
+        for _ in range(num_clusters):
+            cx = random.uniform(self.map_size * 0.1, self.map_size * 0.9)
+            cy = random.uniform(self.map_size * 0.1, self.map_size * 0.9)
+            self.cluster_centers.append((cx, cy))
+
+    def _is_in_restricted_area(self, x: float, y: float) -> bool:
+        """
+        判斷座標是否在受限區域內。
+        
+        Args:
+            x: X 座標
+            y: Y 座標
             
-            dx = c.target_x - c.x
-            dy = c.target_y - c.y
-            dist_to_target = np.sqrt(dx**2 + dy**2)
+        Returns:
+            是否在受限區域內
+        """
+        for cx, cy in self.cluster_centers:
+            distance = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+            if distance < self.map_size * self.CLUSTER_RADIUS_RATIO:
+                return True
+        return False
+
+    def _calculate_service_time(self, demand: float, terrain: int, req_type: str) -> float:
+        """
+        計算服務時間。
+        
+        Args:
+            demand: 需求量 (kWh)
+            terrain: 地形類型 (0: 一般, 1: 受限)
+            req_type: 需求類型 ("FAST" / "SLOW")
             
-            # 2. 移動與狀態更新
-            if dist_to_target <= dist_grid:
-                # 到達目的地
-                c.x = c.target_x
-                c.y = c.target_y
+        Returns:
+            服務時間 (分鐘)
+        """
+        if terrain == 1:
+            power = self.POWER_UAV_FAST
+            overhead = self.SERVICE_OVERHEAD_UAV
+        else:
+            power = self.POWER_FAST if req_type == "FAST" else self.POWER_SLOW
+            overhead = self.SERVICE_OVERHEAD_NORMAL
+        
+        return round((demand / power) * 60 + overhead, 1)
 
-                if c.next_service_duration > 0:
-                    c.status = 'SERVING'  # 切換狀態！
-                    c.service_timer = c.next_service_duration # 設定計時器
-                    c.next_service_duration = 0 # 重置緩衝
+    def generate_requests(self) -> None:
+        """生成需求點數據，包含 Depot 和客戶節點"""
+        # 先生成受限區域中心點
+        self._generate_cluster_centers()
+        
+        # 生成 Depot（設在地圖中心）
+        depot = {
+            "id": 0,
+            "type": "DEPOT",
+            "x": 0,
+            "y": 0,
+            "demand": 0,
+            "r_time": 0,
+            "l_time": self.MINUTES_PER_DAY,
+            "terrain": 0,
+            "service_time": 0
+        }
+        self.nodes.append(depot)
 
-                    for r in c.assigned_requests:
-                        r.status = 'SERVING'
-                    
-                    c.target_x = None
-                    c.target_y = None
-                else:
-                    c.clear_target()
-                
-                # [模擬] 到達後扣除一點移動耗電 (簡化)
-                c.current_energy -= 0.5 
+        # 生成客戶需求
+        for i in range(1, self.num_requests + 1):
+            # 隨機座標
+            x = random.randint(0, self.map_size)
+            y = random.randint(0, self.map_size)
+            
+            # 判斷地形 (0: 一般, 1: 受限/UAV Only)
+            terrain = 1 if self._is_in_restricted_area(x, y) else 0
+            
+            # 決定充電類型 (FAST / SLOW)
+            # 受限區域強制為 FAST（假設山區救援都是急件）
+            if terrain == 1:
+                req_type = "FAST"
             else:
-                # 移動一步
-                ratio = dist_grid / dist_to_target
-                c.x += dx * ratio
-                c.y += dy * ratio
-                # 移動耗電
-                c.current_energy -= 0.1 
-
-            # 邊界與電量檢查
-            c.x = np.clip(c.x, 0, settings.GRID_SIZE)
-            c.y = np.clip(c.y, 0, settings.GRID_SIZE)
-            if c.current_energy < 0: c.current_energy = 0
-
-def dispatch_logic(current_time, chargers, pending_requests, cluster_model):
-    # 篩選還沒被服務的單
-    valid_pending = [r for r in pending_requests if r.status == 'PENDING']
-    
-    # 篩選閒置 MCS
-    idle_mcs = [c for c in chargers if c.type == 'MCS' and c.status == 'IDLE' and c.current_energy > 50]
-    
-    if not idle_mcs or not valid_pending:
-        return []
-
-    # 1. 取得分群 (演算法內部已經處理了容量與偏遠判定)
-    clusters_info = cluster_model.get_capacitated_clusters(valid_pending)
-    
-    centroids_for_plot = []
-    
-    # 2. 指派
-    num_to_assign = min(len(idle_mcs), len(clusters_info))
-    
-    for i in range(num_to_assign):
-        cluster = clusters_info[i]
-        mcs = idle_mcs[i]
-        
-        cx, cy = cluster['centroid']
-        reqs = cluster['requests']
-        total_energy = cluster['total_energy']
-        
-        # 設定 MCS
-        mcs.set_target(cx, cy)
-        mcs.assigned_requests = reqs
-        
-        # 標記 Request
-        for r in reqs:
-            r.status = 'ASSIGNED'
-        
-        # 估算時間
-        charging_power = settings.MCS_POWER_MAX
-        required_hours = total_energy / charging_power
-        mcs.next_service_duration = int(np.ceil(required_hours * 60)) + 10 # +10分鐘緩衝
-        mcs.current_charging_power = charging_power
-        
-        centroids_for_plot.append((cx, cy))
-
-    return centroids_for_plot
-
-def main():
-    print("=== Simulation Started (Capacitated Clustering Mode) ===")
-    
-    chargers = initialize_chargers()
-    generator = RequestGenerator()
-    cluster_model = ClusterModel()
-    
-    current_sim_time = 0 
-    
-    for traffic_slot in range(settings.TOTAL_TIME_SLOTS):
-        
-        if traffic_slot == 0:
-            continue
+                req_type = "FAST" if random.random() < self.PROB_FAST else "SLOW"
             
-        # 1. 生成需求
-        new_requests, traffic = generator.generate_requests(traffic_slot, chargers)
-        if not new_requests:
-            continue
+            # 決定需求量 (kWh)
+            if terrain == 1:  # UAV-only zones
+                demand = round(random.uniform(4.0, self.UAV_MAX_PAYLOAD), 1)
+            elif req_type == "FAST":
+                demand = round(random.uniform(12, 40), 1)
+            else:  # SLOW
+                demand = round(random.uniform(20, 80), 1)
             
-        print(f"\n[Batch {traffic_slot}] Incoming Reqs: {len(new_requests)}")
-        batch_requests = new_requests
-        # 初始化狀態
-        for r in batch_requests: 
-            r.status = 'PENDING'
-            r.due_time = 999999 # Batch 模式下忽略 deadline
+            # 計算服務時間
+            service_time = self._calculate_service_time(demand, terrain, req_type)
+            
+            # 時間窗（反應式服務）
+            request_time = random.randint(self.WORK_START_TIME, self.WORK_END_TIME)
+            
+            # 容忍等待時間（FAST/受限區域容忍度較低）
+            if req_type == "FAST":
+                tolerance = random.randint(30, 60)
+            else:
+                tolerance = random.randint(60, 180)
+            deadline = request_time + tolerance
 
-        # 2. 進入服務迴圈 (直到這批做完)
-        # 注意：因為可能車少單多，我們可能要在迴圈內多次分群
+            node = {
+                "id": i,
+                "type": req_type,
+                "x": x,
+                "y": y,
+                "demand": demand,
+                "r_time": request_time,
+                "l_time": deadline,
+                "terrain": terrain,
+                "service_time": service_time
+            }
+            self.nodes.append(node)
+
+    def generate_fleet(self) -> None:
+        """定義車隊參數"""
+        self.fleet = {
+            "UAV": {
+                "speed": self.SPEED_UAV,
+                "capacity": self.CAPACITY_UAV,
+                "can_serve_restricted": True,
+                "compatible_types": ["FAST"],
+                "count": 2
+            },
+            "MCS_FAST": {
+                "speed": self.SPEED_MCS,
+                "capacity": self.CAPACITY_MCS,
+                "can_serve_restricted": False,
+                "compatible_types": ["FAST"],
+                "count": 3
+            },
+            "MCS_SLOW": {
+                "speed": self.SPEED_MCS,
+                "capacity": self.CAPACITY_MCS,
+                "can_serve_restricted": False,
+                "compatible_types": ["SLOW"],
+                "count": 5
+            }
+        }
+
+    def save_to_json(self, filename: str = "vrp_instance.json") -> None:
+        """
+        將生成的資料儲存為 JSON 檔案。
         
-        plot_done = False # 控制只畫第一張規劃圖
+        Args:
+            filename: 輸出檔案名稱
+        """
+        data = {
+            "meta": {
+                "map_size": self.map_size,
+                "num_requests": self.num_requests
+            },
+            "fleet": self.fleet,
+            "nodes": self.nodes
+        }
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+        print(f"數據已生成並儲存至 {filename}")
 
-        while any(r.status != 'COMPLETED' for r in batch_requests):
+    def visualize(self, output_file: str = "vrp_scenario.png") -> None:
+        """
+        視覺化生成的需求分布。
+        
+        Args:
+            output_file: 輸出圖片檔案名稱
+        """
+        plt.figure(figsize=(8, 8))
+        
+        # 繪製 Depot
+        depot = self.nodes[0]
+        plt.scatter(depot['x'], depot['y'], c='black', marker='s', s=100, label='Depot')
+        
+        # 分類節點以避免重複 label
+        restricted_nodes = [n for n in self.nodes[1:] if n['terrain'] == 1]
+        fast_nodes = [n for n in self.nodes[1:] if n['terrain'] == 0 and n['type'] == 'FAST']
+        slow_nodes = [n for n in self.nodes[1:] if n['terrain'] == 0 and n['type'] == 'SLOW']
+        
+        # 繪製各類型節點
+        if restricted_nodes:
+            plt.scatter(
+                [n['x'] for n in restricted_nodes],
+                [n['y'] for n in restricted_nodes],
+                c='red', marker='^', s=80, label='Restricted (UAV)'
+            )
+        if fast_nodes:
+            plt.scatter(
+                [n['x'] for n in fast_nodes],
+                [n['y'] for n in fast_nodes],
+                c='blue', marker='o', s=60, label='Normal Fast'
+            )
+        if slow_nodes:
+            plt.scatter(
+                [n['x'] for n in slow_nodes],
+                [n['y'] for n in slow_nodes],
+                c='green', marker='o', s=60, label='Normal Slow'
+            )
 
-            for r in batch_requests:
-                if r.status == 'PENDING' and r.req_type == 'URGENT_UAV':
-                    r.status = 'COMPLETED' # 或標記為 'HANDOVER' 視同離開此系統
-                    print(f"   -> [System] Req {r.id} is Remote (UAV). Handover & Close.")
-            
-            # (A) 檢查是否需要調度
-            # 條件：有 PENDING 的單 且 有 IDLE 的車
-            pending_count = sum(1 for r in batch_requests if r.status == 'PENDING')
-            idle_mcs_count = sum(1 for c in chargers if c.type == 'MCS' and c.status == 'IDLE')
-            
-            if pending_count > 0 and idle_mcs_count > 0:
-                # 再次分群並派車
-                centroids = dispatch_logic(current_sim_time, chargers, batch_requests, cluster_model)
-                
-                # 繪圖：只在每個 Batch 第一次派車時畫，或者每次派車都畫
-                # 這裡設定：每個 Batch 的第一次規劃畫一張圖
-                if not plot_done and centroids:
-                    filename = os.path.join(OUTPUT_DIR, f"plan_batch_{traffic_slot:04d}.png")
-                    plot_scenario_snapshot(batch_requests, chargers, current_sim_time, traffic, filename, centroids=centroids)
-                    print(f"   -> Plan plotted: {filename}")
-                    plot_done = True
+        plt.legend()
+        plt.title(f"Simulation Scenario (N={self.num_requests})")
+        plt.xlabel("X (km)")
+        plt.ylabel("Y (km)")
+        plt.xlim(-5, self.map_size + 5)
+        plt.ylim(-5, self.map_size + 5)
+        plt.grid(True, alpha=0.3)
+        plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        plt.close()  # 關閉圖形以釋放記憶體
+        print(f"Visualization saved to {output_file}")
 
-            # (B) 物理移動與服務
-            process_fleet_movement(chargers)
-            current_sim_time += 1
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        取得生成資料的統計資訊。
+        
+        Returns:
+            包含各類統計數據的字典
+        """
+        if not self.nodes:
+            return {}
+        
+        customers = self.nodes[1:]
+        return {
+            "total_customers": len(customers),
+            "restricted_count": sum(1 for n in customers if n['terrain'] == 1),
+            "fast_count": sum(1 for n in customers if n['type'] == 'FAST'),
+            "slow_count": sum(1 for n in customers if n['type'] == 'SLOW'),
+            "total_demand": round(sum(n['demand'] for n in customers), 1),
+            "avg_demand": round(sum(n['demand'] for n in customers) / len(customers), 1) if customers else 0
+        }
 
-        print(f"[Batch {traffic_slot}] All Cleared at Sim Time {current_sim_time}")
 
-    print("=== Simulation Finished ===")
-
+# --- 執行生成 ---
 if __name__ == "__main__":
-    main()
+    # 可指定 seed 以重現結果
+    generator = VRPDataGenerator(map_size=100, num_requests=20, seed=42)
+    generator.generate_requests()
+    generator.generate_fleet()
+    generator.save_to_json()
+    generator.visualize()
+    
+    # 顯示統計資訊
+    stats = generator.get_statistics()
+    print(f"\n=== 生成統計 ===")
+    print(f"總客戶數: {stats['total_customers']}")
+    print(f"受限區域: {stats['restricted_count']}")
+    print(f"快充需求: {stats['fast_count']}")
+    print(f"慢充需求: {stats['slow_count']}")
+    print(f"總需求量: {stats['total_demand']} kWh")
+    print(f"平均需求: {stats['avg_demand']} kWh")
