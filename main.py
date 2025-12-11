@@ -1,4 +1,5 @@
 import random
+import os
 import json
 import math
 from typing import List, Dict, Any, Optional
@@ -25,8 +26,8 @@ class VRPDataGenerator:
     # MCS 參數
     SPEED_MCS = (12 * 3.6) / 60.0  # km/min
     CAPACITY_MCS = 270             # kWh
-    POWER_FAST = 330               # kW (Super Fast Charging)
-    POWER_SLOW = 7                 # kW (AC Slow Charging)
+    POWER_FAST = 250               # kW (Super Fast Charging)
+    POWER_SLOW = 11                 # kW (AC Slow Charging)
     
     # UAV 參數
     SPEED_UAV = 60 / 60.0          # 1 km/min (60 km/h)
@@ -36,7 +37,7 @@ class VRPDataGenerator:
     
     # 機率與地形參數
     PROB_RESTRICTED = 0.1          # 受限區域機率
-    PROB_FAST = 0.4                # 快充需求機率
+    PROB_FAST = 0.3                # 快充需求機率
     CLUSTER_RADIUS_RATIO = 0.15    # 受限區域半徑比例
     
     # 服務時間附加 (分鐘)
@@ -207,13 +208,15 @@ class VRPDataGenerator:
             }
         }
 
-    def save_to_json(self, filename: str = "vrp_instance.json") -> None:
+    def save_to_json(self, filename: str = "data/vrp_instance.json") -> None:
         """
         將生成的資料儲存為 JSON 檔案。
         
         Args:
             filename: 輸出檔案名稱
         """
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+
         data = {
             "meta": {
                 "map_size": self.map_size,
@@ -226,13 +229,14 @@ class VRPDataGenerator:
             json.dump(data, f, indent=4, ensure_ascii=False)
         print(f"數據已生成並儲存至 {filename}")
 
-    def visualize(self, output_file: str = "vrp_scenario.png") -> None:
+    def visualize(self, output_file: str = "image/vrp_scenario.png") -> None:
         """
         視覺化生成的需求分布。
         
         Args:
             output_file: 輸出圖片檔案名稱
         """
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         plt.figure(figsize=(8, 8))
         
         # 繪製 Depot
