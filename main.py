@@ -114,73 +114,107 @@ class VRPDataGenerator:
         return round((demand / power) * 60 + overhead, 1)
 
     def generate_requests(self) -> None:
-        """生成需求點數據，包含 Depot 和客戶節點"""
-        # 先生成受限區域中心點
+        """
+        生成需求點數據。
+        採用兩階段生成法，確保 '受限區域' 算在 '快充' 總名額內。
+        """
+        # 1. 初始化與生成 Depot
         self._generate_cluster_centers()
-        
-        # 生成 Depot（設在地圖中心）
+        self.nodes = []
         depot = {
-            "id": 0,
-            "type": "DEPOT",
-            "x": 0,
-            "y": 0,
-            "demand": 0,
-            "r_time": 0,
-            "l_time": self.MINUTES_PER_DAY,
-            "terrain": 0,
-            "service_time": 0
+            "id": 0, "type": "DEPOT", "x": 0, "y": 0, "demand": 0,
+            "r_time": 0, "l_time": self.MINUTES_PER_DAY, "terrain": 0, "service_time": 0
         }
         self.nodes.append(depot)
 
-        # 生成客戶需求
+        # 2. 計算目標數量 (總量控制)
+        target_fast_count = int(self.num_requests * self.PROB_FAST) # 例如 20 * 0.3 = 6
+        
+        # 3. 第一階段：先生成所有座標與地形 (暫存起來，還不決定詳細屬性)
+        temp_nodes = []
         for i in range(1, self.num_requests + 1):
-            # 隨機座標
             x = random.randint(0, self.map_size)
             y = random.randint(0, self.map_size)
-            
-            # 判斷地形 (0: 一般, 1: 受限/UAV Only)
             terrain = 1 if self._is_in_restricted_area(x, y) else 0
+            temp_nodes.append({
+                "id": i,
+                "x": x,
+                "y": y,
+                "terrain": terrain
+            })
+
+        # 4. 第二階段：分配類型 (Type Assignment)
+        # 先分組
+        restricted_group = [n for n in temp_nodes if n['terrain'] == 1]
+        normal_group = [n for n in temp_nodes if n['terrain'] == 0]
+        
+        # A. 受限區域強制為 FAST (這就是你要的：算在快速充電裡面)
+        for node in restricted_group:
+            node['type'] = 'FAST'
             
-            # 決定充電類型 (FAST / SLOW)
-            # 受限區域強制為 FAST（假設山區救援都是急件）
+        # B. 計算還剩下多少快充名額
+        slots_used = len(restricted_group)
+        slots_remaining = target_fast_count - slots_used
+        
+        # C. 處理一般區域的分配
+        if slots_remaining > 0:
+            # 如果還有名額，從一般區域隨機挑選幸運兒變成 FAST
+            # min 是為了防止剩下的名額比一般節點還多 (雖然機率極低)
+            count_to_pick = min(slots_remaining, len(normal_group))
+            
+            # 隨機抽出要變成快充的 index
+            fast_indices = set(random.sample(range(len(normal_group)), count_to_pick))
+            
+            for idx, node in enumerate(normal_group):
+                if idx in fast_indices:
+                    node['type'] = 'FAST'
+                else:
+                    node['type'] = 'SLOW'
+        else:
+            # 如果受限區域已經太多，佔滿(或超過)了快充名額，剩下的一般區域只能全是 SLOW
+            for node in normal_group:
+                node['type'] = 'SLOW'
+
+        # 將分組後的節點合併回來 (依照 ID 排序以保持順序)
+        processed_nodes = restricted_group + normal_group
+        processed_nodes.sort(key=lambda x: x['id'])
+
+        # 5. 第三階段：根據已確定的類型，生成需求量與時間窗
+        for node in processed_nodes:
+            req_type = node['type']
+            terrain = node['terrain']
+            
+            # 決定需求量
             if terrain == 1:
-                req_type = "FAST"
-            else:
-                req_type = "FAST" if random.random() < self.PROB_FAST else "SLOW"
-            
-            # 決定需求量 (kWh)
-            if terrain == 1:  # UAV-only zones
                 demand = round(random.uniform(4.0, self.UAV_MAX_PAYLOAD), 1)
             elif req_type == "FAST":
                 demand = round(random.uniform(12, 40), 1)
-            else:  # SLOW
+            else: # SLOW
                 demand = round(random.uniform(20, 80), 1)
             
-            # 計算服務時間
             service_time = self._calculate_service_time(demand, terrain, req_type)
-            
-            # 時間窗（反應式服務）
             request_time = random.randint(self.WORK_START_TIME, self.WORK_END_TIME)
             
-            # 容忍等待時間（FAST/受限區域容忍度較低）
             if req_type == "FAST":
                 tolerance = random.randint(30, 60)
             else:
                 tolerance = random.randint(60, 180)
+            
             deadline = request_time + tolerance
 
-            node = {
-                "id": i,
+            # 構建最終節點並加入 self.nodes
+            full_node = {
+                "id": node['id'],
                 "type": req_type,
-                "x": x,
-                "y": y,
+                "x": node['x'],
+                "y": node['y'],
                 "demand": demand,
                 "r_time": request_time,
                 "l_time": deadline,
                 "terrain": terrain,
                 "service_time": service_time
             }
-            self.nodes.append(node)
+            self.nodes.append(full_node)
 
     def generate_fleet(self) -> None:
         """定義車隊參數"""
@@ -280,21 +314,24 @@ class VRPDataGenerator:
         print(f"Visualization saved to {output_file}")
 
     def get_statistics(self) -> Dict[str, Any]:
-        """
-        取得生成資料的統計資訊。
-        
-        Returns:
-            包含各類統計數據的字典
-        """
         if not self.nodes:
             return {}
         
         customers = self.nodes[1:]
+        
+        # 修改點：這裡將分類切得更細，避免重疊
+        restricted_fast = sum(1 for n in customers if n['terrain'] == 1)
+        # 注意：這裡多加了 terrain == 0 的判斷，確保只算一般區域
+        normal_fast = sum(1 for n in customers if n['terrain'] == 0 and n['type'] == 'FAST')
+        normal_slow = sum(1 for n in customers if n['terrain'] == 0 and n['type'] == 'SLOW')
+        
         return {
             "total_customers": len(customers),
-            "restricted_count": sum(1 for n in customers if n['terrain'] == 1),
-            "fast_count": sum(1 for n in customers if n['type'] == 'FAST'),
-            "slow_count": sum(1 for n in customers if n['type'] == 'SLOW'),
+            "restricted_fast": restricted_fast,
+            "normal_fast": normal_fast,
+            "normal_slow": normal_slow,
+            # 增加一個驗證欄位，讓你知道快充總數是否正確
+            "total_fast_sum": restricted_fast + normal_fast, 
             "total_demand": round(sum(n['demand'] for n in customers), 1),
             "avg_demand": round(sum(n['demand'] for n in customers) / len(customers), 1) if customers else 0
         }
@@ -313,8 +350,8 @@ if __name__ == "__main__":
     stats = generator.get_statistics()
     print(f"\n=== 生成統計 ===")
     print(f"總客戶數: {stats['total_customers']}")
-    print(f"受限區域: {stats['restricted_count']}")
-    print(f"快充需求: {stats['fast_count']}")
-    print(f"慢充需求: {stats['slow_count']}")
-    print(f"總需求量: {stats['total_demand']} kWh")
-    print(f"平均需求: {stats['avg_demand']} kWh")
+    print(f"受限區域 (必為快充): {stats['restricted_fast']}")
+    print(f"一般區域 (分配快充): {stats['normal_fast']}")
+    print(f"一般區域 (分配慢充): {stats['normal_slow']}")
+    print(f"--------------------------")
+    print(f"快充總數 (受限+一般): {stats['total_fast_sum']}")

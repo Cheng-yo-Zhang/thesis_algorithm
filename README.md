@@ -1,83 +1,48 @@
+# Thesis Algorithm
 
 ## Prerequisites
 * [Python 3.11+](https://www.python.org/downloads/)
 * [Git](https://git-scm.com/)
 
+## Installation
 
-## Installation & Setup
+### 1. Clone the repository
 ```bash=
-git clone git@github.com:Cheng-yo-Zhang/Bot.git
+git clone git@github.com:Cheng-yo-Zhang/thesis_algorithm.git
+cd thesis_algorithm
 ```
 
-## Change Directory
-```bash=
-cd Bot
-```
-## Set up a virtual environment
-
-### Microsoft Windows
-
-#### 在沒有anaconda環境底下
+### 2. Create virtual environment
+**Windows:**
 ```bash=
 python -version -m venv venv
-```
-
-#### 在有anaconda環境底下
-```bash=
-py -m venv venv
-```
-
-#### Enable virtual environment
-```bash=
 venv\Scripts\activate
 ```
-#### upgrade pip.
-```bash=
-python -m pip install --upgrade pip
-```
 
-#### Installation kit
-```bash=
-pip install -r requirements.txt
-```
-
-#### Disable virtual environment
-```bash=
-deactivate
-```
-
-#### Remove virtual environment
-```bash=
-rmdir venv
-```
-
-### macOS
+**macOS/Linux:**
 ```bash=
 python -version -m venv venv
-```
-
-#### 啟用虛擬環境
-```bash=
 source venv/bin/activate
 ```
 
-#### 先升級pip
+### 3. Install dependencies
 ```bash=
 python -m pip install --upgrade pip
-```
-
-#### 安裝套件
-```bash=
 pip install -r requirements.txt
 ```
 
-#### 停用虛擬環境
+### 4. Deactivate virtual environment
 ```bash=
 deactivate
 ```
 
-#### 移除虛擬環境
+### 5. Remove virtual environment
+**Windows:**
 ```bash=
-rmdir venv
-python -m src.generator
+rmdir /s venv
+```
+
+**macOS/Linux:**
+```bash=
+rm -rf venv
 ```
