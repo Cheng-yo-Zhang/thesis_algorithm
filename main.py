@@ -340,7 +340,7 @@ class VRPDataGenerator:
 # --- 執行生成 ---
 if __name__ == "__main__":
     # 可指定 seed 以重現結果
-    generator = VRPDataGenerator(map_size=100, num_requests=20, seed=42)
+    generator = VRPDataGenerator(map_size=100, num_requests=20, seed=38)
     generator.generate_requests()
     generator.generate_fleet()
     generator.save_to_json()
