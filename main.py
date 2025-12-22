@@ -6,9 +6,6 @@ from typing import List, Dict, Any, Optional
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
-from scipy.spatial import ConvexHull
-from matplotlib.patches import Polygon
-import numpy as np
 
 
 class VRPDataGenerator:
@@ -125,7 +122,7 @@ class VRPDataGenerator:
         self._generate_cluster_centers()
         self.nodes = []
         depot = {
-            "id": 0, "type": "DEPOT", "x": 0, "y": 0, "demand": 0,
+            "id": 0, "type": "DEPOT", "x": 50, "y": 50, "demand": 0,
             "r_time": 0, "l_time": self.MINUTES_PER_DAY, "terrain": 0, "service_time": 0
         }
         self.nodes.append(depot)
@@ -205,6 +202,9 @@ class VRPDataGenerator:
             
             deadline = request_time + tolerance
 
+            # 計算 dwell_time (可容忍等待時間) 供演算法判斷充電模式
+            dwell_time = deadline - request_time
+            
             # 構建最終節點並加入 self.nodes
             full_node = {
                 "id": node['id'],
@@ -214,6 +214,7 @@ class VRPDataGenerator:
                 "demand": demand,
                 "r_time": request_time,
                 "l_time": deadline,
+                "dwell_time": dwell_time,  # 可容忍時間窗，用於判斷 FAST/SLOW 模式
                 "terrain": terrain,
                 "service_time": service_time
             }
@@ -229,18 +230,13 @@ class VRPDataGenerator:
                 "compatible_types": ["FAST"],
                 "count": 2
             },
-            "MCS_FAST": {
+            "MCS": {
                 "speed": self.SPEED_MCS,
                 "capacity": self.CAPACITY_MCS,
                 "can_serve_restricted": False,
-                "compatible_types": ["FAST"],
-                "count": 3
-            },
-            "MCS_SLOW": {
-                "speed": self.SPEED_MCS,
-                "capacity": self.CAPACITY_MCS,
-                "can_serve_restricted": False,
-                "compatible_types": ["SLOW"],
+                "compatible_types": ["FAST", "SLOW"],  # MCS 可服務兩種充電類型
+                "power_fast": self.POWER_FAST,          # 快充功率 250 kW
+                "power_slow": self.POWER_SLOW,          # 慢充功率 11 kW
                 "count": 5
             }
         }
@@ -274,32 +270,7 @@ class VRPDataGenerator:
             output_file: 輸出圖片檔案名稱
         """
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        fig, ax = plt.subplots(figsize=(8, 8))
-
-        # 1. 為了讓Grid看起來不那麼像「完美的棋盤道路」，我們可以把透明度調低，
-        #    或者只在特定區域畫Grid。這裡我們先把 grid 變淡，讓它看起來像「座標系統」而非「道路」。
-        ax.grid(True, linestyle='--', alpha=0.2) 
-
-        # 2. 繪製受限區域的「地形邊界」 (關鍵修改!)
-        #    找出所有地形為 1 的點
-        restricted_points = np.array([[n['x'], n['y']] for n in self.nodes if n['terrain'] == 1])
-        
-        if len(restricted_points) > 2: # 至少要3個點才能圍成一個面
-            # 使用凸包 (Convex Hull) 算法自動圈出這些點
-            hull = ConvexHull(restricted_points)
-            # 取得頂點並封閉路徑
-            vertices = restricted_points[hull.vertices]
-            
-            # 畫出一個淺紅色的多邊形區域，代表 "Restricted Terrain"
-            poly = Polygon(vertices, facecolor='mistyrose', edgecolor='red', 
-                           linestyle='--', alpha=0.4, label='Restricted Terrain')
-            ax.add_patch(poly)
-            
-            # (選用) 在這個區域內加上文字標註
-            cx = np.mean(restricted_points[:,0])
-            cy = np.mean(restricted_points[:,1])
-            ax.text(cx, cy, "UAV Only", color='darkred', fontsize=12, 
-                    ha='center', va='center', fontweight='bold')
+        plt.figure(figsize=(8, 8))
         
         # 繪製 Depot
         depot = self.nodes[0]
@@ -368,7 +339,7 @@ class VRPDataGenerator:
 # --- 執行生成 ---
 if __name__ == "__main__":
     # 可指定 seed 以重現結果
-    generator = VRPDataGenerator(map_size=100, num_requests=20, seed=45)
+    generator = VRPDataGenerator(map_size=100, num_requests=20, seed=42)
     generator.generate_requests()
     generator.generate_fleet()
     generator.save_to_json()
