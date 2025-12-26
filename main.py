@@ -1,356 +1,243 @@
-import random
-import os
-import json
-import math
-from typing import List, Dict, Any, Optional
+import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+matplotlib.use('Agg')  # 使用非互動式後端
 import matplotlib.pyplot as plt
+import numpy as np
+import random
+from dataclasses import dataclass
+from typing import List, Set
 
 
-class VRPDataGenerator:
-    """
-    VRP 資料生成器：生成包含 MCS 和 UAV 混合車隊的車輛路徑問題測試案例。
+# ==================== 參數配置 ====================
+@dataclass
+class MCSConfig:
+    """Mobile Charging Station (MCS) 參數配置"""
+    SPEED: float = (12 * 3.6) / 60.0   # km/min (原速度 12 m/s)
+    CAPACITY: float = 270.0             # kWh 電池容量
+    POWER_FAST: float = 250.0           # kW (Super Fast Charging)
+    POWER_SLOW: float = 11.0            # kW (AC Slow Charging)
+
+
+@dataclass
+class UAVConfig:
+    """Unmanned Aerial Vehicle (UAV) 參數配置"""
+    SPEED: float = 60.0 / 60.0          # km/min (60 km/h)
+    CAPACITY: float = 15.0              # kWh 電池容量
+    POWER_FAST: float = 50.0            # kW 快充功率
+    MAX_PAYLOAD: float = 12.0           # kWh 最大載電量
+
+
+@dataclass
+class ProblemConfig:
+    """問題實例參數配置"""
+    HARD_TO_ACCESS_RATIO: float = 0.10  # Hard-to-Access 節點比例
+    URGENT_RATIO: float = 0.20          # Urgent 節點比例
+    RANDOM_SEED: int = 42               # 隨機種子
+
+
+# ==================== 節點類別 ====================
+@dataclass
+class Node:
+    """節點資料結構"""
+    id: int
+    x: float
+    y: float
+    demand: float
+    ready_time: float
+    due_date: float
+    service_time: float
+    node_type: str = 'normal'  # 'depot', 'normal', 'hard_to_access', 'urgent'
+
+
+# ==================== 主程式類別 ====================
+class ChargingSchedulingProblem:
+    """充電排程問題"""
     
-    Attributes:
-        map_size: 地圖大小 (km)
-        num_requests: 客戶需求數量
-    """
-    
-    # ==================== 常數定義 ====================
-    # 時間常數 (分鐘)
-    MINUTES_PER_DAY = 1440
-    WORK_START_TIME = 480   # 08:00
-    WORK_END_TIME = 1080    # 18:00
-    
-    # MCS 參數
-    SPEED_MCS = (12 * 3.6) / 60.0  # km/min
-    CAPACITY_MCS = 270             # kWh
-    POWER_FAST = 250               # kW (Super Fast Charging)
-    POWER_SLOW = 11                 # kW (AC Slow Charging)
-    
-    # UAV 參數
-    SPEED_UAV = 60 / 60.0          # 1 km/min (60 km/h)
-    CAPACITY_UAV = 15              # kWh
-    POWER_UAV_FAST = 50            # kW
-    UAV_MAX_PAYLOAD = 12.0         # kWh，無人機最大載電量
-    
-    # 機率與地形參數
-    PROB_RESTRICTED = 0.1          # 受限區域機率
-    PROB_FAST = 0.3                # 快充需求機率
-    CLUSTER_RADIUS_RATIO = 0.15    # 受限區域半徑比例
-    
-    # 服務時間附加 (分鐘)
-    SERVICE_OVERHEAD_UAV = 10.0
-    SERVICE_OVERHEAD_NORMAL = 5.0
-    
-    def __init__(self, map_size: int = 100, num_requests: Optional[int] = None, seed: Optional[int] = None):
-        """
-        初始化 VRP 資料生成器。
+    def __init__(self, 
+                 mcs_config: MCSConfig = None,
+                 uav_config: UAVConfig = None,
+                 problem_config: ProblemConfig = None):
         
-        Args:
-            map_size: 地圖大小 (km)，預設 100
-            num_requests: 客戶需求數量，若為 None 則隨機生成 5-50
-            seed: 隨機種子，用於結果重現
-        """
-        if seed is not None:
-            random.seed(seed)
+        self.mcs = mcs_config or MCSConfig()
+        self.uav = uav_config or UAVConfig()
+        self.config = problem_config or ProblemConfig()
         
-        self.map_size = map_size
-        self.num_requests = num_requests if num_requests else random.randint(5, 50)
+        self.nodes: List[Node] = []
+        self.depot: Node = None
+        self.hard_to_access_indices: Set[int] = set()
+        self.urgent_indices: Set[int] = set()
         
-        if self.num_requests <= 0:
-            raise ValueError("num_requests 必須大於 0")
-
-        self.nodes: List[Dict[str, Any]] = []
-        self.fleet: Dict[str, Any] = {}
-        self.cluster_centers: List[tuple] = []  # 受限區域中心點
-
-    def _generate_cluster_centers(self) -> None:
-        """生成受限區域的中心點（在生成需求前調用一次）"""
-        num_clusters = random.randint(2, 5)
-        self.cluster_centers = []
-        for _ in range(num_clusters):
-            cx = random.uniform(self.map_size * 0.1, self.map_size * 0.9)
-            cy = random.uniform(self.map_size * 0.1, self.map_size * 0.9)
-            self.cluster_centers.append((cx, cy))
-
-    def _is_in_restricted_area(self, x: float, y: float) -> bool:
-        """
-        判斷座標是否在受限區域內。
+        # 設定隨機種子
+        random.seed(self.config.RANDOM_SEED)
+        np.random.seed(self.config.RANDOM_SEED)
+    
+    def load_data(self, filepath: str) -> None:
+        """讀取 CSV 資料"""
+        df = pd.read_csv(filepath)
         
-        Args:
-            x: X 座標
-            y: Y 座標
+        for idx, row in df.iterrows():
+            node = Node(
+                id=int(row['CUST NO.']),
+                x=float(row['XCOORD.']),
+                y=float(row['YCOORD.']),
+                demand=float(row['DEMAND']),
+                ready_time=float(row['READY TIME']),
+                due_date=float(row['DUE DATE']),
+                service_time=float(row['SERVICE TIME'])
+            )
             
+            if idx == 0:
+                node.node_type = 'depot'
+                self.depot = node
+            
+            self.nodes.append(node)
+        
+        print(f"載入 {len(self.nodes)} 個節點 (含 depot)")
+    
+    def assign_node_types(self) -> None:
+        """隨機分配節點類型"""
+        customer_indices = [i for i in range(1, len(self.nodes))]
+        num_customers = len(customer_indices)
+        
+        # 隨機選取 Hard-to-Access 節點
+        num_hard = int(num_customers * self.config.HARD_TO_ACCESS_RATIO)
+        self.hard_to_access_indices = set(random.sample(customer_indices, num_hard))
+        
+        for idx in self.hard_to_access_indices:
+            self.nodes[idx].node_type = 'hard_to_access'
+        
+        # 從剩餘節點選取 Urgent 節點
+        remaining = [i for i in customer_indices if i not in self.hard_to_access_indices]
+        num_urgent = int(num_customers * self.config.URGENT_RATIO)
+        self.urgent_indices = set(random.sample(remaining, num_urgent))
+        
+        for idx in self.urgent_indices:
+            self.nodes[idx].node_type = 'urgent'
+        
+        print(f"Hard-to-Access 節點: {len(self.hard_to_access_indices)} 個")
+        print(f"Urgent 節點: {len(self.urgent_indices)} 個")
+        print(f"Normal 節點: {num_customers - len(self.hard_to_access_indices) - len(self.urgent_indices)} 個")
+    
+    def calculate_distance(self, node1: Node, node2: Node, distance_type: str = 'euclidean') -> float:
+        """
+        計算兩節點間的距離
+        
+        Args:
+            node1: 起點節點
+            node2: 終點節點
+            distance_type: 'euclidean' (歐幾里得) 或 'manhattan' (曼哈頓)
+        
         Returns:
-            是否在受限區域內
+            距離值
         """
-        for cx, cy in self.cluster_centers:
-            distance = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-            if distance < self.map_size * self.CLUSTER_RADIUS_RATIO:
-                return True
-        return False
-
-    def _calculate_service_time(self, demand: float, terrain: int, req_type: str) -> float:
+        if distance_type == 'manhattan':
+            # 曼哈頓距離 (適用於地面車輛 MCS)
+            return abs(node1.x - node2.x) + abs(node1.y - node2.y)
+        else:
+            # 歐幾里得距離 (適用於 UAV 直線飛行)
+            return np.sqrt((node1.x - node2.x)**2 + (node1.y - node2.y)**2)
+    
+    def calculate_travel_time(self, node1: Node, node2: Node, vehicle: str = 'mcs') -> float:
         """
-        計算服務時間。
+        計算行駛時間 (分鐘)
         
         Args:
-            demand: 需求量 (kWh)
-            terrain: 地形類型 (0: 一般, 1: 受限)
-            req_type: 需求類型 ("FAST" / "SLOW")
-            
+            node1: 起點節點
+            node2: 終點節點
+            vehicle: 'mcs' (地面車) 或 'uav' (無人機)
+        
         Returns:
-            服務時間 (分鐘)
+            行駛時間 (分鐘)
         """
-        if terrain == 1:
-            power = self.POWER_UAV_FAST
-            overhead = self.SERVICE_OVERHEAD_UAV
+        if vehicle == 'mcs':
+            # MCS 使用曼哈頓距離
+            distance = self.calculate_distance(node1, node2, distance_type='manhattan')
+            return distance / self.mcs.SPEED
         else:
-            power = self.POWER_FAST if req_type == "FAST" else self.POWER_SLOW
-            overhead = self.SERVICE_OVERHEAD_NORMAL
+            # UAV 使用歐幾里得距離
+            distance = self.calculate_distance(node1, node2, distance_type='euclidean')
+            return distance / self.uav.SPEED
+    
+    def calculate_charging_time(self, energy_kwh: float, power_kw: float) -> float:
+        """計算充電時間 (分鐘)"""
+        return (energy_kwh / power_kw) * 60.0
+    
+    def plot_nodes(self, save_path: str = 'node_distribution.png') -> None:
+        """繪製節點分布圖"""
+        plt.figure(figsize=(10, 8))
         
-        return round((demand / power) * 60 + overhead, 1)
-
-    def generate_requests(self) -> None:
-        """
-        生成需求點數據。
-        採用兩階段生成法，確保 '受限區域' 算在 '快充' 總名額內。
-        """
-        # 1. 初始化與生成 Depot
-        self._generate_cluster_centers()
-        self.nodes = []
-        depot = {
-            "id": 0, "type": "DEPOT", "x": 50, "y": 50, "demand": 0,
-            "r_time": 0, "l_time": self.MINUTES_PER_DAY, "terrain": 0, "service_time": 0
-        }
-        self.nodes.append(depot)
-
-        # 2. 計算目標數量 (總量控制)
-        target_fast_count = int(self.num_requests * self.PROB_FAST) # 例如 20 * 0.3 = 6
+        # 分類節點
+        normal_nodes = [n for n in self.nodes if n.node_type == 'normal']
+        hard_nodes = [n for n in self.nodes if n.node_type == 'hard_to_access']
+        urgent_nodes = [n for n in self.nodes if n.node_type == 'urgent']
         
-        # 3. 第一階段：先生成所有座標與地形 (暫存起來，還不決定詳細屬性)
-        temp_nodes = []
-        for i in range(1, self.num_requests + 1):
-            x = random.randint(0, self.map_size)
-            y = random.randint(0, self.map_size)
-            terrain = 1 if self._is_in_restricted_area(x, y) else 0
-            temp_nodes.append({
-                "id": i,
-                "x": x,
-                "y": y,
-                "terrain": terrain
-            })
-
-        # 4. 第二階段：分配類型 (Type Assignment)
-        # 先分組
-        restricted_group = [n for n in temp_nodes if n['terrain'] == 1]
-        normal_group = [n for n in temp_nodes if n['terrain'] == 0]
+        # 繪製普通節點 (藍色)
+        if normal_nodes:
+            plt.scatter([n.x for n in normal_nodes], [n.y for n in normal_nodes],
+                       c='blue', marker='o', s=50, label='Normal')
         
-        # A. 受限區域強制為 FAST (這就是你要的：算在快速充電裡面)
-        for node in restricted_group:
-            node['type'] = 'FAST'
-            
-        # B. 計算還剩下多少快充名額
-        slots_used = len(restricted_group)
-        slots_remaining = target_fast_count - slots_used
+        # 繪製 Hard-to-Access 節點 (紅色)
+        if hard_nodes:
+            plt.scatter([n.x for n in hard_nodes], [n.y for n in hard_nodes],
+                       c='red', marker='^', s=80, label='Hard-to-Access (10%)')
         
-        # C. 處理一般區域的分配
-        if slots_remaining > 0:
-            # 如果還有名額，從一般區域隨機挑選幸運兒變成 FAST
-            # min 是為了防止剩下的名額比一般節點還多 (雖然機率極低)
-            count_to_pick = min(slots_remaining, len(normal_group))
-            
-            # 隨機抽出要變成快充的 index
-            fast_indices = set(random.sample(range(len(normal_group)), count_to_pick))
-            
-            for idx, node in enumerate(normal_group):
-                if idx in fast_indices:
-                    node['type'] = 'FAST'
-                else:
-                    node['type'] = 'SLOW'
-        else:
-            # 如果受限區域已經太多，佔滿(或超過)了快充名額，剩下的一般區域只能全是 SLOW
-            for node in normal_group:
-                node['type'] = 'SLOW'
-
-        # 將分組後的節點合併回來 (依照 ID 排序以保持順序)
-        processed_nodes = restricted_group + normal_group
-        processed_nodes.sort(key=lambda x: x['id'])
-
-        # 5. 第三階段：根據已確定的類型，生成需求量與時間窗
-        for node in processed_nodes:
-            req_type = node['type']
-            terrain = node['terrain']
-            
-            # 決定需求量
-            if terrain == 1:
-                demand = round(random.uniform(4.0, self.UAV_MAX_PAYLOAD), 1)
-            elif req_type == "FAST":
-                demand = round(random.uniform(12, 40), 1)
-            else: # SLOW
-                demand = round(random.uniform(20, 80), 1)
-            
-            service_time = self._calculate_service_time(demand, terrain, req_type)
-            request_time = random.randint(self.WORK_START_TIME, self.WORK_END_TIME)
-            
-            if req_type == "FAST":
-                tolerance = random.randint(30, 60)
-            else:
-                tolerance = random.randint(60, 180)
-            
-            deadline = request_time + tolerance
-
-            # 計算 dwell_time (可容忍等待時間) 供演算法判斷充電模式
-            dwell_time = deadline - request_time
-            
-            # 構建最終節點並加入 self.nodes
-            full_node = {
-                "id": node['id'],
-                "type": req_type,
-                "x": node['x'],
-                "y": node['y'],
-                "demand": demand,
-                "r_time": request_time,
-                "l_time": deadline,
-                "dwell_time": dwell_time,  # 可容忍時間窗，用於判斷 FAST/SLOW 模式
-                "terrain": terrain,
-                "service_time": service_time
-            }
-            self.nodes.append(full_node)
-
-    def generate_fleet(self) -> None:
-        """定義車隊參數"""
-        self.fleet = {
-            "UAV": {
-                "speed": self.SPEED_UAV,
-                "capacity": self.CAPACITY_UAV,
-                "can_serve_restricted": True,
-                "compatible_types": ["FAST"],
-                "count": 2
-            },
-            "MCS": {
-                "speed": self.SPEED_MCS,
-                "capacity": self.CAPACITY_MCS,
-                "can_serve_restricted": False,
-                "compatible_types": ["FAST", "SLOW"],  # MCS 可服務兩種充電類型
-                "power_fast": self.POWER_FAST,          # 快充功率 250 kW
-                "power_slow": self.POWER_SLOW,          # 慢充功率 11 kW
-                "count": 5
-            }
-        }
-
-    def save_to_json(self, filename: str = "data/vrp_instance.json") -> None:
-        """
-        將生成的資料儲存為 JSON 檔案。
+        # 繪製 Urgent 節點 (橘色)
+        if urgent_nodes:
+            plt.scatter([n.x for n in urgent_nodes], [n.y for n in urgent_nodes],
+                       c='orange', marker='s', s=80, label='Urgent (20%)')
         
-        Args:
-            filename: 輸出檔案名稱
-        """
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-
-        data = {
-            "meta": {
-                "map_size": self.map_size,
-                "num_requests": self.num_requests
-            },
-            "fleet": self.fleet,
-            "nodes": self.nodes
-        }
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        print(f"數據已生成並儲存至 {filename}")
-
-    def visualize(self, output_file: str = "image/vrp_scenario.png") -> None:
-        """
-        視覺化生成的需求分布。
+        # 繪製 Depot (綠色)
+        if self.depot:
+            plt.scatter(self.depot.x, self.depot.y,
+                       c='green', marker='*', s=200, label='Depot')
         
-        Args:
-            output_file: 輸出圖片檔案名稱
-        """
-        os.makedirs(os.path.dirname(output_file), exist_ok=True)
-        plt.figure(figsize=(8, 8))
-        
-        # 繪製 Depot
-        depot = self.nodes[0]
-        plt.scatter(depot['x'], depot['y'], c='black', marker='s', s=100, label='Depot')
-        
-        # 分類節點以避免重複 label
-        restricted_nodes = [n for n in self.nodes[1:] if n['terrain'] == 1]
-        fast_nodes = [n for n in self.nodes[1:] if n['terrain'] == 0 and n['type'] == 'FAST']
-        slow_nodes = [n for n in self.nodes[1:] if n['terrain'] == 0 and n['type'] == 'SLOW']
-        
-        # 繪製各類型節點
-        if restricted_nodes:
-            plt.scatter(
-                [n['x'] for n in restricted_nodes],
-                [n['y'] for n in restricted_nodes],
-                c='red', marker='^', s=80, label='Restricted (UAV)'
-            )
-        if fast_nodes:
-            plt.scatter(
-                [n['x'] for n in fast_nodes],
-                [n['y'] for n in fast_nodes],
-                c='blue', marker='o', s=60, label='Normal Fast'
-            )
-        if slow_nodes:
-            plt.scatter(
-                [n['x'] for n in slow_nodes],
-                [n['y'] for n in slow_nodes],
-                c='green', marker='o', s=60, label='Normal Slow'
-            )
-
+        plt.xlabel('X Coordinate')
+        plt.ylabel('Y Coordinate')
+        plt.title('R101 Node Distribution')
         plt.legend()
-        plt.title(f"Simulation Scenario (N={self.num_requests})")
-        plt.xlabel("X (km)")
-        plt.ylabel("Y (km)")
-        plt.xlim(-5, self.map_size + 5)
-        plt.ylim(-5, self.map_size + 5)
         plt.grid(True, alpha=0.3)
-        plt.savefig(output_file, dpi=150, bbox_inches='tight')
-        plt.close()  # 關閉圖形以釋放記憶體
-        print(f"Visualization saved to {output_file}")
-
-    def get_statistics(self) -> Dict[str, Any]:
-        if not self.nodes:
-            return {}
-        
-        customers = self.nodes[1:]
-        
-        # 修改點：這裡將分類切得更細，避免重疊
-        restricted_fast = sum(1 for n in customers if n['terrain'] == 1)
-        # 注意：這裡多加了 terrain == 0 的判斷，確保只算一般區域
-        normal_fast = sum(1 for n in customers if n['terrain'] == 0 and n['type'] == 'FAST')
-        normal_slow = sum(1 for n in customers if n['terrain'] == 0 and n['type'] == 'SLOW')
-        
-        return {
-            "total_customers": len(customers),
-            "restricted_fast": restricted_fast,
-            "normal_fast": normal_fast,
-            "normal_slow": normal_slow,
-            # 增加一個驗證欄位，讓你知道快充總數是否正確
-            "total_fast_sum": restricted_fast + normal_fast, 
-            "total_demand": round(sum(n['demand'] for n in customers), 1),
-            "avg_demand": round(sum(n['demand'] for n in customers) / len(customers), 1) if customers else 0
-        }
-
-
-# --- 執行生成 ---
-if __name__ == "__main__":
-    # 可指定 seed 以重現結果
-    generator = VRPDataGenerator(map_size=100, num_requests=20, seed=42)
-    generator.generate_requests()
-    generator.generate_fleet()
-    generator.save_to_json()
-    generator.visualize()
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150)
+        print(f"圖片已儲存至: {save_path}")
     
-    # 顯示統計資訊
-    stats = generator.get_statistics()
-    print(f"\n=== 生成統計 ===")
-    print(f"總客戶數: {stats['total_customers']}")
-    print(f"受限區域 (必為快充): {stats['restricted_fast']}")
-    print(f"一般區域 (分配快充): {stats['normal_fast']}")
-    print(f"一般區域 (分配慢充): {stats['normal_slow']}")
-    print(f"--------------------------")
-    print(f"快充總數 (受限+一般): {stats['total_fast_sum']}")
+    def print_config(self) -> None:
+        """輸出參數配置"""
+        print("\n" + "="*50)
+        print("MCS 參數配置:")
+        print(f"  速度: {self.mcs.SPEED:.3f} km/min ({self.mcs.SPEED * 60:.1f} km/h)")
+        print(f"  電池容量: {self.mcs.CAPACITY} kWh")
+        print(f"  快充功率: {self.mcs.POWER_FAST} kW")
+        print(f"  慢充功率: {self.mcs.POWER_SLOW} kW")
+        print("\nUAV 參數配置:")
+        print(f"  速度: {self.uav.SPEED:.3f} km/min ({self.uav.SPEED * 60:.1f} km/h)")
+        print(f"  電池容量: {self.uav.CAPACITY} kWh")
+        print(f"  快充功率: {self.uav.POWER_FAST} kW")
+        print(f"  最大載電量: {self.uav.MAX_PAYLOAD} kWh")
+        print("="*50 + "\n")
+
+
+# ==================== 主程式入口 ====================
+def main():
+    # 初始化問題
+    problem = ChargingSchedulingProblem()
+    
+    # 輸出參數配置
+    problem.print_config()
+    
+    # 載入資料
+    problem.load_data('R101.csv')
+    
+    # 分配節點類型
+    problem.assign_node_types()
+    
+    # 繪製節點分布圖
+    problem.plot_nodes()
+    
+    # 輸出節點資訊
+    print(f"\nHard-to-Access 節點索引: {sorted(problem.hard_to_access_indices)}")
+    print(f"Urgent 節點索引: {sorted(problem.urgent_indices)}")
+
+
+if __name__ == "__main__":
+    main()
+
