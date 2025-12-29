@@ -124,23 +124,28 @@ class Route:
 class Solution:
     """解的容器 - 包含多條路徑"""
     
-    # 目標函數權重 (可調整)
-    WEIGHT_WAITING_TIME: float = 1.0      # 平均等待時間權重
-    WEIGHT_COVERAGE: float = 100.0        # 覆蓋率懲罰權重 (每個未服務節點)
-    WEIGHT_FLEXIBILITY: float = 0.5       # 調度彈性權重
+    # ===== 階層式目標函數權重 (適用於 ALNS) =====
+    # 設計原則：未服務懲罰 >> 等待時間 >> 距離
+    PENALTY_UNASSIGNED: float = 10000.0   # 未服務節點懲罰 (極大，確保不作弊)
+    WEIGHT_WAITING: float = 1.0           # 平均等待時間權重 (主要目標)
+    WEIGHT_DISTANCE: float = 0.01         # 距離權重 (tie-breaker，避免繞路)
     
     def __init__(self):
         self.mcs_routes: List[Route] = []  # MCS 路徑列表
         self.uav_routes: List[Route] = []  # UAV 路徑列表
+        
+        # ===== 目標函數值 =====
         self.total_cost: float = float('inf')
+        
+        # ===== 統計指標 =====
         self.total_distance: float = 0.0
         self.total_time: float = 0.0
-        self.total_waiting_time: float = 0.0  # 總等待時間
-        self.avg_waiting_time: float = 0.0    # 平均等待時間
-        self.coverage_rate: float = 0.0       # 覆蓋率 (0~1)
-        self.flexibility_score: float = 0.0  # 調度彈性分數
-        self.unassigned_nodes: List[Node] = []  # 未分配的節點
-        self.total_customers: int = 0         # 總客戶數
+        self.total_waiting_time: float = 0.0
+        self.avg_waiting_time: float = 0.0
+        self.coverage_rate: float = 0.0
+        self.flexibility_score: float = 0.0
+        self.unassigned_nodes: List[Node] = []
+        self.total_customers: int = 0
         self.is_feasible: bool = False
     
     def add_mcs_route(self, route: Route) -> None:
@@ -166,15 +171,21 @@ class Solution:
     
     def calculate_total_cost(self, total_customers: int = None) -> float:
         """
-        計算多目標總成本
+        計算階層式目標函數值 (適用於 ALNS)
         
-        目標函數 = W1 * 平均等待時間 + W2 * 未服務節點數 + W3 * 彈性懲罰
+        Objective Function (Hierarchical):
+            Cost = α × 未服務節點數 + β × 平均等待時間 + γ × 總距離
+        
+        設計原則：
+            - α (10000): 極大懲罰，確保 ALNS 不會「丟棄客戶」來作弊
+            - β (1.0): 主要最佳化目標
+            - γ (0.01): Tie-breaker，避免為了省 1 分鐘而繞路 50 公里
         
         Args:
             total_customers: 總客戶數 (用於計算覆蓋率)
         
         Returns:
-            總成本值
+            目標函數值
         """
         all_routes = self.get_all_routes()
         
@@ -182,7 +193,7 @@ class Solution:
         self.total_distance = sum(r.total_distance for r in all_routes)
         self.total_time = sum(r.total_time for r in all_routes)
         
-        # 2. 計算總等待時間與平均等待時間
+        # 2. 計算等待時間
         self.total_waiting_time = sum(r.total_waiting_time for r in all_routes)
         served_count = sum(len(r.nodes) for r in all_routes)
         self.avg_waiting_time = self.total_waiting_time / served_count if served_count > 0 else 0.0
@@ -195,22 +206,26 @@ class Solution:
         else:
             self.coverage_rate = 1.0
         
-        # 4. 計算調度彈性分數 (車輛利用率的變異係數，越小越平衡)
+        # 4. 計算彈性分數
         self.flexibility_score = self._calculate_flexibility_score()
         
-        # 5. 多目標成本函數
-        # 目標：最小化等待時間、最大化覆蓋率、最大化彈性(平衡度)
-        waiting_penalty = self.WEIGHT_WAITING_TIME * self.avg_waiting_time
-        coverage_penalty = self.WEIGHT_COVERAGE * len(self.unassigned_nodes)
-        flexibility_penalty = self.WEIGHT_FLEXIBILITY * self.flexibility_score
+        # ===== 階層式目標函數 =====
+        # 情境 A 防護：未服務節點有極大懲罰，ALNS 絕不會選擇丟棄客戶
+        # 情境 B 防護：距離有小權重，繞路 50km 會增加 0.5 成本，不划算
+        unassigned_penalty = self.PENALTY_UNASSIGNED * len(self.unassigned_nodes)
+        waiting_cost = self.WEIGHT_WAITING * self.avg_waiting_time
+        distance_cost = self.WEIGHT_DISTANCE * self.total_distance
         
-        self.total_cost = waiting_penalty + coverage_penalty + flexibility_penalty
+        self.total_cost = unassigned_penalty + waiting_cost + distance_cost
+        
+        # 可行性判定
+        self.is_feasible = len(self.unassigned_nodes) == 0
         
         return self.total_cost
     
     def _calculate_flexibility_score(self) -> float:
         """
-        計算調度彈性分數
+        計算調度彈性分數 (報告指標，非最佳化目標)
         
         使用車輛負載的變異係數 (CV) 來衡量平衡度
         CV = 標準差 / 平均值，越小表示負載越平衡
@@ -265,25 +280,33 @@ class Solution:
         print("📊 解的摘要")
         print("="*60)
         
-        # 基本資訊
+        # 車輛配置
         print("\n【車輛配置】")
         print(f"  MCS 路徑數: {len(self.mcs_routes)}")
         print(f"  UAV 路徑數: {len(self.uav_routes)}")
         
-        # 目標函數相關指標
-        print("\n【目標函數指標】")
-        print(f"  📌 總成本 (多目標): {self.total_cost:.2f}")
-        print(f"  ├─ 平均等待時間: {self.avg_waiting_time:.2f} 分鐘 (權重: {self.WEIGHT_WAITING_TIME})")
-        print(f"  ├─ 覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers}) (懲罰權重: {self.WEIGHT_COVERAGE}/未服務節點)")
-        print(f"  └─ 彈性分數 (CV): {self.flexibility_score:.3f} (權重: {self.WEIGHT_FLEXIBILITY}, 越小越平衡)")
+        # 目標函數分解
+        print("\n【目標函數 (階層式)】")
+        print(f"  🎯 總成本: {self.total_cost:.2f}")
+        unassigned_penalty = self.PENALTY_UNASSIGNED * len(self.unassigned_nodes)
+        waiting_cost = self.WEIGHT_WAITING * self.avg_waiting_time
+        distance_cost = self.WEIGHT_DISTANCE * self.total_distance
+        print(f"  ├─ 未服務懲罰: {unassigned_penalty:.2f} ({len(self.unassigned_nodes)} × {self.PENALTY_UNASSIGNED})")
+        print(f"  ├─ 等待成本: {waiting_cost:.2f} ({self.avg_waiting_time:.2f} min × {self.WEIGHT_WAITING})")
+        print(f"  └─ 距離成本: {distance_cost:.2f} ({self.total_distance:.2f} km × {self.WEIGHT_DISTANCE})")
+        
+        # 關鍵指標
+        print("\n【關鍵指標】")
+        print(f"  平均等待時間: {self.avg_waiting_time:.2f} 分鐘 ← 主要目標")
+        print(f"  覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers})")
+        print(f"  可行解: {'✅ 是' if self.is_feasible else '❌ 否 (有未服務節點)'}")
         
         # 其他指標
         print("\n【其他指標】")
         print(f"  總距離: {self.total_distance:.2f} km")
         print(f"  總時間: {self.total_time:.2f} 分鐘")
         print(f"  總等待時間: {self.total_waiting_time:.2f} 分鐘")
-        print(f"  未分配節點: {len(self.unassigned_nodes)} 個")
-        print(f"  可行解: {'✅ 是' if self.is_feasible else '❌ 否'}")
+        print(f"  彈性分數 (CV): {self.flexibility_score:.3f}")
         
         # 路徑詳情
         if self.mcs_routes:
