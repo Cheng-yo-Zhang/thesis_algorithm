@@ -501,7 +501,14 @@ class ChargingSchedulingProblem:
             # 等待時間 = max(0, ready_time - arrival_time)
             waiting_time = max(0.0, node.ready_time - arrival_time)
             service_start = max(arrival_time, node.ready_time)
-            departure_time = service_start + node.service_time
+            
+            # 動態計算充電時間 (根據需求電量和車輛充電功率)
+            if vehicle == 'mcs':
+                charging_power = self.mcs.POWER_FAST  # MCS 使用快充 250 kW
+            else:
+                charging_power = self.uav.POWER_FAST  # UAV 使用 50 kW
+            service_time = self.calculate_charging_time(node.demand, charging_power)
+            departure_time = service_start + service_time
             
             route.arrival_times.append(arrival_time)
             route.departure_times.append(departure_time)
