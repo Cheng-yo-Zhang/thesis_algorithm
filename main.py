@@ -4,8 +4,9 @@ matplotlib.use('Agg')  # 使用非互動式後端
 import matplotlib.pyplot as plt
 import numpy as np
 import random
-from dataclasses import dataclass
-from typing import List, Set
+import time
+from dataclasses import dataclass, field
+from typing import List, Set, Tuple, Callable, Dict, Optional
 
 
 # ==================== 參數配置 ====================
@@ -33,6 +34,34 @@ class ProblemConfig:
     HARD_TO_ACCESS_RATIO: float = 0.10  # Hard-to-Access 節點比例
     URGENT_RATIO: float = 0.20          # Urgent 節點比例
     RANDOM_SEED: int = 42               # 隨機種子
+    TW_URGENT: float = 60.0             # Urgent 節點時間窗寬度 (分鐘)
+    TW_NORMAL: float = 240.0            # Normal 節點時間窗寬度 (分鐘, 4小時)
+
+
+@dataclass
+class ALNSConfig:
+    """ALNS 求解器參數配置"""
+    # Destroy 參數
+    DESTROY_MIN: int = 2                # 最小移除節點數
+    DESTROY_MAX: int = 8                # 最大移除節點數
+    SHAW_DISTANCE_WEIGHT: float = 0.4   # Shaw removal: 距離權重
+    SHAW_TIME_WEIGHT: float = 0.4       # Shaw removal: 時間權重
+    SHAW_TYPE_WEIGHT: float = 0.2       # Shaw removal: 類型權重
+    
+    # Adaptive weights 參數
+    SIGMA_1: float = 33.0               # 發現新 global best
+    SIGMA_2: float = 9.0                # 改善 current (接受)
+    SIGMA_3: float = 3.0                # 接受但未改善
+    REACTION_FACTOR: float = 0.1        # 權重更新反應係數 ρ
+    SEGMENT_SIZE: int = 50              # 每幾次迭代更新一次權重
+    
+    # Simulated Annealing 參數
+    INIT_TEMP_RATIO: float = 0.1        # T0 = ratio * initial_cost
+    COOLING_RATE: float = 0.9995        # 降溫速率
+    MIN_TEMP: float = 0.01              # 最低溫度
+    
+    # 輸出控制
+    LOG_INTERVAL: int = 50              # 每幾次迭代輸出一次 log
 
 
 # ==================== 節點類別 ====================
@@ -67,6 +96,7 @@ class Route:
         self.departure_times: List[float] = []  # 各節點的出發時間
         self.arrival_times: List[float] = []  # 各節點的到達時間
         self.waiting_times: List[float] = []  # 各節點的等待時間
+        self.charging_modes: List[str] = []  # 各節點的充電模式 ('FAST' 或 'SLOW')
         self.total_distance: float = 0.0
         self.total_time: float = 0.0
         self.total_waiting_time: float = 0.0  # 路徑總等待時間
@@ -109,6 +139,7 @@ class Route:
         new_route.departure_times = self.departure_times.copy()
         new_route.arrival_times = self.arrival_times.copy()
         new_route.waiting_times = self.waiting_times.copy()
+        new_route.charging_modes = self.charging_modes.copy()
         new_route.total_distance = self.total_distance
         new_route.total_time = self.total_time
         new_route.total_waiting_time = self.total_waiting_time
@@ -277,7 +308,7 @@ class Solution:
     def print_summary(self) -> None:
         """輸出解的摘要"""
         print("\n" + "="*60)
-        print("📊 解的摘要")
+        print("解的摘要")
         print("="*60)
         
         # 車輛配置
@@ -287,7 +318,7 @@ class Solution:
         
         # 目標函數分解
         print("\n【目標函數 (階層式)】")
-        print(f"  🎯 總成本: {self.total_cost:.2f}")
+        print(f"  總成本: {self.total_cost:.2f}")
         unassigned_penalty = self.PENALTY_UNASSIGNED * len(self.unassigned_nodes)
         waiting_cost = self.WEIGHT_WAITING * self.avg_waiting_time
         distance_cost = self.WEIGHT_DISTANCE * self.total_distance
@@ -299,7 +330,7 @@ class Solution:
         print("\n【關鍵指標】")
         print(f"  平均等待時間: {self.avg_waiting_time:.2f} 分鐘 ← 主要目標")
         print(f"  覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers})")
-        print(f"  可行解: {'✅ 是' if self.is_feasible else '❌ 否 (有未服務節點)'}")
+        print(f"  可行解: {'是' if self.is_feasible else '否 (有未服務節點)'}")
         
         # 其他指標
         print("\n【其他指標】")
@@ -308,14 +339,33 @@ class Solution:
         print(f"  總等待時間: {self.total_waiting_time:.2f} 分鐘")
         print(f"  彈性分數 (CV): {self.flexibility_score:.3f}")
         
+        # MCS 充電模式統計
+        mcs_fast_count = 0
+        mcs_slow_count = 0
+        for route in self.mcs_routes:
+            for mode in route.charging_modes:
+                if mode == 'FAST':
+                    mcs_fast_count += 1
+                elif mode == 'SLOW':
+                    mcs_slow_count += 1
+        
+        print("\n【MCS 充電模式統計】")
+        print(f"  Fast Charging (250 kW): {mcs_fast_count} 次")
+        print(f"  Slow Charging (11 kW): {mcs_slow_count} 次")
+        if mcs_fast_count + mcs_slow_count > 0:
+            slow_ratio = mcs_slow_count / (mcs_fast_count + mcs_slow_count) * 100
+            print(f"  慢充比例: {slow_ratio:.1f}%")
+        
         # 路徑詳情
         if self.mcs_routes:
             print("\n【MCS 路徑詳情】")
             for route in self.mcs_routes:
+                mode_summary = f"[F:{route.charging_modes.count('FAST')}/S:{route.charging_modes.count('SLOW')}]"
                 print(f"  {route.vehicle_type.upper()}-{route.vehicle_id}: "
                       f"節點={route.get_node_ids()}, "
                       f"距離={route.total_distance:.1f}km, "
-                      f"等待={route.total_waiting_time:.1f}min")
+                      f"等待={route.total_waiting_time:.1f}min, "
+                      f"模式={mode_summary}")
         
         if self.uav_routes:
             print("\n【UAV 路徑詳情】")
@@ -326,6 +376,820 @@ class Solution:
                       f"等待={route.total_waiting_time:.1f}min")
         
         print("\n" + "="*60)
+
+
+# ==================== 距離矩陣快取 ====================
+class DistanceMatrix:
+    """
+    預計算距離矩陣，避免 ALNS 迭代時重複計算
+    - MCS: 曼哈頓距離
+    - UAV: 歐幾里得距離
+    """
+    
+    def __init__(self, nodes: List[Node]):
+        """
+        初始化距離矩陣
+        
+        Args:
+            nodes: 包含 depot 在內的所有節點列表
+        """
+        n = len(nodes)
+        self.n = n
+        self.nodes = nodes
+        
+        # 預計算距離矩陣
+        self.manhattan = np.zeros((n, n))  # MCS 使用
+        self.euclidean = np.zeros((n, n))  # UAV 使用
+        
+        for i in range(n):
+            for j in range(n):
+                if i != j:
+                    dx = abs(nodes[i].x - nodes[j].x)
+                    dy = abs(nodes[i].y - nodes[j].y)
+                    self.manhattan[i, j] = dx + dy
+                    self.euclidean[i, j] = np.sqrt(dx**2 + dy**2)
+    
+    def get_distance(self, node1: Node, node2: Node, vehicle: str = 'mcs') -> float:
+        """取得兩節點間距離"""
+        if vehicle == 'mcs':
+            return self.manhattan[node1.id, node2.id]
+        else:
+            return self.euclidean[node1.id, node2.id]
+    
+    def get_travel_time(self, node1: Node, node2: Node, vehicle: str, 
+                        mcs_speed: float, uav_speed: float) -> float:
+        """取得行駛時間 (分鐘)"""
+        dist = self.get_distance(node1, node2, vehicle)
+        if vehicle == 'mcs':
+            return dist / mcs_speed
+        else:
+            return dist / uav_speed
+
+
+# ==================== ALNS 求解器 ====================
+class ALNSSolver:
+    """
+    Adaptive Large Neighborhood Search 求解器
+    
+    特性：
+    - 使用 Simulated Annealing 作為接受準則
+    - 支援 3 種 destroy operators + 2 種 repair operators
+    - Adaptive weight 每 segment 更新一次
+    - 完全遵守 hard_to_access -> UAV only 的限制
+    """
+    
+    def __init__(self, 
+                 problem: 'ChargingSchedulingProblem',
+                 config: ALNSConfig = None,
+                 seed: int = None):
+        """
+        初始化 ALNS 求解器
+        
+        Args:
+            problem: ChargingSchedulingProblem 實例
+            config: ALNS 參數配置
+            seed: 隨機種子 (None 表示使用 problem 的種子)
+        """
+        self.problem = problem
+        self.config = config or ALNSConfig()
+        
+        # 設定隨機種子
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+        
+        # 預計算距離矩陣
+        self.dist_matrix = DistanceMatrix(problem.nodes)
+        
+        # 總客戶數 (用於 calculate_total_cost)
+        self.total_customers = len(problem.nodes) - 1  # 排除 depot
+        
+        # Destroy operators
+        self.destroy_operators = [
+            self._random_removal,
+            self._worst_removal,
+            self._shaw_removal
+        ]
+        self.destroy_names = ['Random', 'Worst', 'Shaw']
+        
+        # Repair operators
+        self.repair_operators = [
+            self._greedy_insertion,
+            self._regret_k_insertion
+        ]
+        self.repair_names = ['Greedy', 'Regret-2']
+        
+        # Adaptive weights (初始均等)
+        self.destroy_weights = np.ones(len(self.destroy_operators))
+        self.repair_weights = np.ones(len(self.repair_operators))
+        
+        # Operator 統計 (用於 segment 內的 weight update)
+        self._reset_segment_stats()
+    
+    def _reset_segment_stats(self) -> None:
+        """重置 segment 統計"""
+        self.destroy_scores = np.zeros(len(self.destroy_operators))
+        self.destroy_usages = np.zeros(len(self.destroy_operators))
+        self.repair_scores = np.zeros(len(self.repair_operators))
+        self.repair_usages = np.zeros(len(self.repair_operators))
+    
+    def _roulette_wheel_selection(self, weights: np.ndarray) -> int:
+        """輪盤賭選擇"""
+        total = weights.sum()
+        if total == 0:
+            return random.randint(0, len(weights) - 1)
+        probs = weights / total
+        return np.random.choice(len(weights), p=probs)
+    
+    def _get_destroy_size(self) -> int:
+        """取得本次迭代的 destroy size"""
+        return random.randint(self.config.DESTROY_MIN, self.config.DESTROY_MAX)
+    
+    # ==================== Destroy Operators ====================
+    
+    def _random_removal(self, solution: Solution, k: int) -> Tuple[Solution, List[Node]]:
+        """
+        Random Removal: 隨機移除 k 個客戶
+        
+        Args:
+            solution: 當前解 (會被修改)
+            k: 移除數量
+        
+        Returns:
+            (修改後的 solution, 被移除的節點列表)
+        """
+        removed = []
+        all_routes = solution.get_all_routes()
+        
+        # 收集所有已分配的客戶 (node, route, position)
+        candidates = []
+        for route in all_routes:
+            for pos, node in enumerate(route.nodes):
+                candidates.append((node, route, pos))
+        
+        if len(candidates) == 0:
+            return solution, removed
+        
+        # 隨機選取 k 個 (不超過現有數量)
+        k = min(k, len(candidates))
+        selected = random.sample(candidates, k)
+        
+        # 按 position 降序排列，從後往前移除避免 index shift
+        selected.sort(key=lambda x: x[2], reverse=True)
+        
+        for node, route, pos in selected:
+            route.remove_node(pos)
+            removed.append(node)
+        
+        # 移除空路徑
+        self._remove_empty_routes(solution)
+        
+        return solution, removed
+    
+    def _worst_removal(self, solution: Solution, k: int) -> Tuple[Solution, List[Node]]:
+        """
+        Worst Removal: 移除「邊際成本」最高的 k 個客戶
+        邊際成本 = 該節點對總距離的貢獻 + 該節點造成的等待時間
+        
+        Args:
+            solution: 當前解 (會被修改)
+            k: 移除數量
+        
+        Returns:
+            (修改後的 solution, 被移除的節點列表)
+        """
+        removed = []
+        
+        # 收集所有已分配的客戶並計算邊際成本
+        candidates = []  # (marginal_cost, node, route, position)
+        
+        for route in solution.get_all_routes():
+            if len(route.nodes) == 0:
+                continue
+            
+            vehicle = route.vehicle_type
+            
+            for pos, node in enumerate(route.nodes):
+                # 計算移除此節點後的距離變化
+                prev_node = self.problem.depot if pos == 0 else route.nodes[pos - 1]
+                next_node = self.problem.depot if pos == len(route.nodes) - 1 else route.nodes[pos + 1]
+                
+                # 原本的距離
+                dist_before = (self.dist_matrix.get_distance(prev_node, node, vehicle) +
+                               self.dist_matrix.get_distance(node, next_node, vehicle))
+                # 移除後的距離
+                dist_after = self.dist_matrix.get_distance(prev_node, next_node, vehicle)
+                
+                # 距離節省 (正值表示移除有利)
+                dist_saving = dist_before - dist_after
+                
+                # 等待時間貢獻
+                waiting_cost = route.waiting_times[pos] if pos < len(route.waiting_times) else 0.0
+                
+                # 邊際成本：距離 + 等待 (要移除成本高的)
+                # 注意：這裡用「負的節省」作為成本，所以節省越多的反而成本越低
+                # 我們要移除的是「造成負擔最大的」，即 dist_saving 越大越該移除
+                marginal_cost = dist_saving + waiting_cost * 0.1
+                
+                candidates.append((marginal_cost, node, route, pos))
+        
+        if len(candidates) == 0:
+            return solution, removed
+        
+        # 按邊際成本降序排列
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        
+        # 選取前 k 個
+        k = min(k, len(candidates))
+        
+        # 加入一些隨機性：使用 randomized worst removal
+        # 隨機選取 top 2k 中的 k 個
+        pool_size = min(2 * k, len(candidates))
+        pool = candidates[:pool_size]
+        selected = random.sample(pool, k)
+        
+        # 收集要移除的 (route, pos) 對
+        to_remove = [(route, pos, node) for _, node, route, pos in selected]
+        
+        # 按 route 分組並按 pos 降序排列
+        route_removals: Dict[Route, List[Tuple[int, Node]]] = {}
+        for route, pos, node in to_remove:
+            if route not in route_removals:
+                route_removals[route] = []
+            route_removals[route].append((pos, node))
+        
+        for route, items in route_removals.items():
+            items.sort(key=lambda x: x[0], reverse=True)
+            for pos, node in items:
+                if pos < len(route.nodes):  # 安全檢查
+                    route.remove_node(pos)
+                    removed.append(node)
+        
+        # 移除空路徑
+        self._remove_empty_routes(solution)
+        
+        return solution, removed
+    
+    def _shaw_removal(self, solution: Solution, k: int) -> Tuple[Solution, List[Node]]:
+        """
+        Shaw Removal: 移除相似的 k 個客戶 (空間+時間+類型)
+        
+        Args:
+            solution: 當前解 (會被修改)
+            k: 移除數量
+        
+        Returns:
+            (修改後的 solution, 被移除的節點列表)
+        """
+        removed = []
+        
+        # 收集所有已分配的客戶
+        candidates = []
+        for route in solution.get_all_routes():
+            for pos, node in enumerate(route.nodes):
+                candidates.append((node, route, pos))
+        
+        if len(candidates) == 0:
+            return solution, removed
+        
+        k = min(k, len(candidates))
+        
+        # 隨機選取 seed 節點
+        seed_idx = random.randint(0, len(candidates) - 1)
+        seed_node = candidates[seed_idx][0]
+        
+        # 計算每個節點與 seed 的 relatedness
+        relatedness = []
+        for node, route, pos in candidates:
+            rel = self._calculate_relatedness(seed_node, node)
+            relatedness.append((rel, node, route, pos))
+        
+        # 按 relatedness 升序排列 (越小越相似)
+        relatedness.sort(key=lambda x: x[0])
+        
+        # 選取前 k 個最相似的
+        selected = relatedness[:k]
+        
+        # 收集要移除的
+        to_remove = [(route, pos, node) for _, node, route, pos in selected]
+        
+        # 按 route 分組並按 pos 降序排列
+        route_removals: Dict[Route, List[Tuple[int, Node]]] = {}
+        for route, pos, node in to_remove:
+            if route not in route_removals:
+                route_removals[route] = []
+            route_removals[route].append((pos, node))
+        
+        for route, items in route_removals.items():
+            items.sort(key=lambda x: x[0], reverse=True)
+            for pos, node in items:
+                if pos < len(route.nodes):
+                    route.remove_node(pos)
+                    removed.append(node)
+        
+        # 移除空路徑
+        self._remove_empty_routes(solution)
+        
+        return solution, removed
+    
+    def _calculate_relatedness(self, node1: Node, node2: Node) -> float:
+        """
+        計算兩節點的 relatedness (越小越相似)
+        
+        Components:
+        - 空間距離 (歐式距離，正規化)
+        - 時間窗差異 (due_date 差距)
+        - 類型差異 (相同類型 = 0，不同 = 1)
+        """
+        cfg = self.config
+        
+        # 空間距離 (使用歐式距離)
+        dist = self.dist_matrix.euclidean[node1.id, node2.id]
+        
+        # 時間窗差異
+        time_diff = abs(node1.due_date - node2.due_date)
+        
+        # 類型差異
+        type_same = 1.0 if node1.node_type == node2.node_type else 0.0
+        type_diff = 1.0 - type_same
+        
+        # 加權組合 (距離和時間正規化到相近尺度)
+        relatedness = (cfg.SHAW_DISTANCE_WEIGHT * dist +
+                       cfg.SHAW_TIME_WEIGHT * time_diff +
+                       cfg.SHAW_TYPE_WEIGHT * type_diff * 100)  # type_diff 放大
+        
+        return relatedness
+    
+    def _remove_empty_routes(self, solution: Solution) -> None:
+        """移除空路徑並重新編號"""
+        solution.mcs_routes = [r for r in solution.mcs_routes if len(r.nodes) > 0]
+        solution.uav_routes = [r for r in solution.uav_routes if len(r.nodes) > 0]
+        
+        # 重新編號
+        for i, route in enumerate(solution.mcs_routes):
+            route.vehicle_id = i
+        for i, route in enumerate(solution.uav_routes):
+            route.vehicle_id = i
+    
+    # ==================== Repair Operators ====================
+    
+    def _greedy_insertion(self, solution: Solution, removed_nodes: List[Node]) -> Solution:
+        """
+        Greedy Insertion: 依序將節點插入成本增加最小的位置
+        
+        Args:
+            solution: 當前解 (會被修改)
+            removed_nodes: 待插入的節點列表
+        
+        Returns:
+            修改後的 solution
+        """
+        # 按 due_date 排序 (早的優先插入)
+        nodes_to_insert = sorted(removed_nodes, key=lambda n: n.due_date)
+        
+        for node in nodes_to_insert:
+            best_route = None
+            best_position = None
+            best_cost_increase = float('inf')
+            
+            # 決定可用的路徑
+            if node.node_type == 'hard_to_access':
+                candidate_routes = solution.uav_routes
+            else:
+                candidate_routes = solution.mcs_routes + solution.uav_routes
+            
+            # 嘗試插入每條現有路徑的每個位置
+            for route in candidate_routes:
+                for pos in range(len(route.nodes) + 1):
+                    # 複製路徑測試
+                    test_route = route.copy()
+                    test_route.insert_node(pos, node)
+                    
+                    if self.problem.evaluate_route(test_route):
+                        cost_increase = test_route.total_distance - route.total_distance
+                        if cost_increase < best_cost_increase:
+                            best_cost_increase = cost_increase
+                            best_route = route
+                            best_position = pos
+            
+            # 如果找到可行插入點
+            if best_route is not None:
+                best_route.insert_node(best_position, node)
+                self.problem.evaluate_route(best_route)
+            else:
+                # 嘗試開啟新路徑
+                inserted = self._try_create_new_route(solution, node)
+                if not inserted:
+                    solution.unassigned_nodes.append(node)
+        
+        return solution
+    
+    def _regret_k_insertion(self, solution: Solution, removed_nodes: List[Node], k: int = 2) -> Solution:
+        """
+        Regret-k Insertion: 使用 regret 值決定插入順序
+        
+        Regret = (次佳插入成本) - (最佳插入成本)
+        Regret 越大的節點越先插入，因為它對位置選擇越敏感
+        
+        Args:
+            solution: 當前解 (會被修改)
+            removed_nodes: 待插入的節點列表
+            k: regret 計算的候選數量
+        
+        Returns:
+            修改後的 solution
+        """
+        nodes_to_insert = list(removed_nodes)
+        
+        while nodes_to_insert:
+            best_node = None
+            best_route = None
+            best_position = None
+            best_regret = -float('inf')
+            best_cost = float('inf')
+            
+            for node in nodes_to_insert:
+                # 決定可用的路徑
+                if node.node_type == 'hard_to_access':
+                    candidate_routes = solution.uav_routes
+                else:
+                    candidate_routes = solution.mcs_routes + solution.uav_routes
+                
+                # 收集所有可行插入位置及其成本
+                insertion_options = []  # (cost_increase, route, position)
+                
+                for route in candidate_routes:
+                    for pos in range(len(route.nodes) + 1):
+                        test_route = route.copy()
+                        test_route.insert_node(pos, node)
+                        
+                        if self.problem.evaluate_route(test_route):
+                            cost_increase = test_route.total_distance - route.total_distance
+                            insertion_options.append((cost_increase, route, pos))
+                
+                # 檢查是否可以開新路徑
+                new_route_cost = self._estimate_new_route_cost(node)
+                if new_route_cost is not None:
+                    insertion_options.append((new_route_cost, None, None))  # None 表示新路徑
+                
+                if len(insertion_options) == 0:
+                    # 無法插入此節點，給予極大 regret 讓它先處理
+                    regret = float('inf')
+                    if regret > best_regret:
+                        best_regret = regret
+                        best_node = node
+                        best_route = None
+                        best_position = None
+                        best_cost = float('inf')
+                    continue
+                
+                # 按成本排序
+                insertion_options.sort(key=lambda x: x[0])
+                
+                # 計算 regret
+                if len(insertion_options) >= k:
+                    regret = insertion_options[k-1][0] - insertion_options[0][0]
+                else:
+                    regret = insertion_options[-1][0] - insertion_options[0][0]
+                
+                # 選擇 regret 最大的節點
+                if regret > best_regret or (regret == best_regret and insertion_options[0][0] < best_cost):
+                    best_regret = regret
+                    best_node = node
+                    best_cost, best_route, best_position = insertion_options[0]
+            
+            # 執行最佳插入
+            if best_node is None:
+                break
+            
+            nodes_to_insert.remove(best_node)
+            
+            if best_route is None and best_position is None:
+                # 開新路徑
+                inserted = self._try_create_new_route(solution, best_node)
+                if not inserted:
+                    solution.unassigned_nodes.append(best_node)
+            elif best_route is not None:
+                best_route.insert_node(best_position, best_node)
+                self.problem.evaluate_route(best_route)
+            else:
+                solution.unassigned_nodes.append(best_node)
+        
+        return solution
+    
+    def _try_create_new_route(self, solution: Solution, node: Node) -> bool:
+        """
+        嘗試為節點建立新路徑
+        
+        Args:
+            solution: 解
+            node: 要插入的節點
+        
+        Returns:
+            是否成功建立
+        """
+        if node.node_type == 'hard_to_access':
+            # 只能開 UAV
+            new_route = Route(vehicle_type='uav')
+            new_route.add_node(node)
+            if self.problem.evaluate_route(new_route):
+                solution.add_uav_route(new_route)
+                return True
+            return False
+        else:
+            # 優先 MCS，再試 UAV
+            new_route = Route(vehicle_type='mcs')
+            new_route.add_node(node)
+            if self.problem.evaluate_route(new_route):
+                solution.add_mcs_route(new_route)
+                return True
+            
+            new_route = Route(vehicle_type='uav')
+            new_route.add_node(node)
+            if self.problem.evaluate_route(new_route):
+                solution.add_uav_route(new_route)
+                return True
+            
+            return False
+    
+    def _estimate_new_route_cost(self, node: Node) -> Optional[float]:
+        """
+        估計為節點開新路徑的成本
+        
+        Returns:
+            成本估計值，或 None 表示不可行
+        """
+        if node.node_type == 'hard_to_access':
+            vehicle = 'uav'
+        else:
+            vehicle = 'mcs'
+        
+        # 估計成本 = depot -> node -> depot 的距離
+        depot = self.problem.depot
+        dist = (self.dist_matrix.get_distance(depot, node, vehicle) +
+                self.dist_matrix.get_distance(node, depot, vehicle))
+        
+        # 簡單檢查時間可行性
+        if vehicle == 'mcs':
+            speed = self.problem.mcs.SPEED
+        else:
+            speed = self.problem.uav.SPEED
+        
+        travel_time = dist / speed
+        service_start = max(travel_time, node.ready_time)
+        
+        if service_start > node.due_date:
+            return None
+        
+        return dist
+    
+    # ==================== Adaptive Weight Update ====================
+    
+    def _update_weights(self) -> None:
+        """更新 operator 權重 (每 segment 呼叫一次)"""
+        rho = self.config.REACTION_FACTOR
+        
+        # 更新 destroy weights
+        for i in range(len(self.destroy_operators)):
+            if self.destroy_usages[i] > 0:
+                avg_score = self.destroy_scores[i] / self.destroy_usages[i]
+            else:
+                avg_score = 0.0
+            self.destroy_weights[i] = (1 - rho) * self.destroy_weights[i] + rho * avg_score
+        
+        # 更新 repair weights
+        for i in range(len(self.repair_operators)):
+            if self.repair_usages[i] > 0:
+                avg_score = self.repair_scores[i] / self.repair_usages[i]
+            else:
+                avg_score = 0.0
+            self.repair_weights[i] = (1 - rho) * self.repair_weights[i] + rho * avg_score
+        
+        # 確保權重不為零
+        self.destroy_weights = np.maximum(self.destroy_weights, 0.1)
+        self.repair_weights = np.maximum(self.repair_weights, 0.1)
+        
+        # 重置統計
+        self._reset_segment_stats()
+    
+    # ==================== Main Solve Loop ====================
+    
+    def solve(self, 
+              initial_solution: Solution, 
+              max_iters: int = 1000,
+              time_limit_sec: float = None) -> Solution:
+        """
+        執行 ALNS 求解
+        
+        Args:
+            initial_solution: 初始解 (通常來自 greedy_construction)
+            max_iters: 最大迭代次數
+            time_limit_sec: 時間限制 (秒)，None 表示不限制
+        
+        Returns:
+            找到的最佳解
+        """
+        start_time = time.time()
+        
+        # 初始化
+        current_solution = initial_solution.copy()
+        best_solution = initial_solution.copy()
+        
+        # 確保初始解已計算成本
+        current_solution.calculate_total_cost(self.total_customers)
+        best_solution.calculate_total_cost(self.total_customers)
+        
+        # SA 溫度初始化
+        temperature = self.config.INIT_TEMP_RATIO * max(current_solution.total_cost, 1.0)
+        
+        print("\n" + "="*80)
+        print("開始 ALNS 求解")
+        print("="*80)
+        print(f"初始解成本: {initial_solution.total_cost:.2f}")
+        print(f"初始溫度: {temperature:.4f}")
+        print(f"最大迭代: {max_iters}")
+        if time_limit_sec:
+            print(f"時間限制: {time_limit_sec} 秒")
+        print("-"*80)
+        print(f"{'Iter':>6} | {'Best':>10} | {'Current':>10} | {'Avg Wait':>8} | "
+              f"{'Coverage':>8} | {'Unassigned':>10} | {'Destroy':>8} | {'Repair':>8} | {'Accept':>6}")
+        print("-"*80)
+        
+        for iteration in range(1, max_iters + 1):
+            # 檢查時間限制
+            if time_limit_sec and (time.time() - start_time) > time_limit_sec:
+                print(f"\n達到時間限制 ({time_limit_sec}s)，提前終止")
+                break
+            
+            # 選擇 operators
+            destroy_idx = self._roulette_wheel_selection(self.destroy_weights)
+            repair_idx = self._roulette_wheel_selection(self.repair_weights)
+            
+            destroy_op = self.destroy_operators[destroy_idx]
+            repair_op = self.repair_operators[repair_idx]
+            
+            # 記錄使用次數
+            self.destroy_usages[destroy_idx] += 1
+            self.repair_usages[repair_idx] += 1
+            
+            # 複製當前解進行操作
+            new_solution = current_solution.copy()
+            new_solution.unassigned_nodes = []  # 清空，destroy/repair 會重新填入
+            
+            # Destroy
+            k = self._get_destroy_size()
+            new_solution, removed_nodes = destroy_op(new_solution, k)
+            
+            # Repair
+            new_solution = repair_op(new_solution, removed_nodes)
+            
+            # 重新評估所有路徑
+            for route in new_solution.get_all_routes():
+                self.problem.evaluate_route(route)
+            
+            # 計算成本
+            new_solution.calculate_total_cost(self.total_customers)
+            
+            # 計算分數和接受決策
+            score = 0.0
+            accepted = False
+            new_global_best = False
+            
+            # 檢查是否為新 global best
+            if new_solution.total_cost < best_solution.total_cost:
+                best_solution = new_solution.copy()
+                score = self.config.SIGMA_1
+                accepted = True
+                new_global_best = True
+            # 檢查是否改善 current
+            elif new_solution.total_cost < current_solution.total_cost:
+                score = self.config.SIGMA_2
+                accepted = True
+            # SA 接受準則
+            else:
+                delta = new_solution.total_cost - current_solution.total_cost
+                if temperature > self.config.MIN_TEMP:
+                    accept_prob = np.exp(-delta / temperature)
+                    if random.random() < accept_prob:
+                        score = self.config.SIGMA_3
+                        accepted = True
+            
+            # 更新 current solution
+            if accepted:
+                current_solution = new_solution.copy()
+            
+            # 累計分數
+            self.destroy_scores[destroy_idx] += score
+            self.repair_scores[repair_idx] += score
+            
+            # 降溫
+            temperature *= self.config.COOLING_RATE
+            temperature = max(temperature, self.config.MIN_TEMP)
+            
+            # 定期輸出 log
+            if iteration % self.config.LOG_INTERVAL == 0:
+                accept_str = "Y*" if new_global_best else ("Y" if accepted else "N")
+                print(f"{iteration:>6} | {best_solution.total_cost:>10.2f} | "
+                      f"{current_solution.total_cost:>10.2f} | "
+                      f"{current_solution.avg_waiting_time:>8.2f} | "
+                      f"{current_solution.coverage_rate:>7.1%} | "
+                      f"{len(current_solution.unassigned_nodes):>10} | "
+                      f"{self.destroy_names[destroy_idx]:>8} | "
+                      f"{self.repair_names[repair_idx]:>8} | "
+                      f"{accept_str:>6}")
+            
+            # 每 segment 更新權重
+            if iteration % self.config.SEGMENT_SIZE == 0:
+                self._update_weights()
+        
+        elapsed_time = time.time() - start_time
+        
+        print("-"*80)
+        print(f"ALNS 完成! 耗時 {elapsed_time:.2f} 秒")
+        print(f"最佳成本: {best_solution.total_cost:.2f}")
+        print(f"覆蓋率: {best_solution.coverage_rate:.1%}")
+        print(f"平均等待時間: {best_solution.avg_waiting_time:.2f} 分鐘")
+        print("="*80)
+        
+        # 輸出 operator 權重統計
+        print("\n【Operator 最終權重】")
+        print("  Destroy operators:")
+        for i, name in enumerate(self.destroy_names):
+            print(f"    {name}: {self.destroy_weights[i]:.3f}")
+        print("  Repair operators:")
+        for i, name in enumerate(self.repair_names):
+            print(f"    {name}: {self.repair_weights[i]:.3f}")
+        
+        return best_solution
+
+
+# ==================== 視覺化函式 ====================
+def plot_routes(solution: Solution, problem: 'ChargingSchedulingProblem', 
+                save_path: str = 'routes.png') -> None:
+    """
+    繪製 MCS 和 UAV 路徑
+    
+    Args:
+        solution: 解
+        problem: 問題實例
+        save_path: 儲存路徑
+    """
+    plt.figure(figsize=(12, 10))
+    
+    # 定義顏色
+    mcs_colors = plt.cm.Blues(np.linspace(0.4, 0.9, max(len(solution.mcs_routes), 1)))
+    uav_colors = plt.cm.Reds(np.linspace(0.4, 0.9, max(len(solution.uav_routes), 1)))
+    
+    depot = problem.depot
+    
+    # 繪製 MCS 路徑
+    for i, route in enumerate(solution.mcs_routes):
+        if len(route.nodes) == 0:
+            continue
+        
+        # 收集路徑點
+        xs = [depot.x] + [n.x for n in route.nodes] + [depot.x]
+        ys = [depot.y] + [n.y for n in route.nodes] + [depot.y]
+        
+        plt.plot(xs, ys, 'o-', color=mcs_colors[i], linewidth=2, 
+                 markersize=8, label=f'MCS-{route.vehicle_id}')
+    
+    # 繪製 UAV 路徑 (虛線表示飛行)
+    for i, route in enumerate(solution.uav_routes):
+        if len(route.nodes) == 0:
+            continue
+        
+        xs = [depot.x] + [n.x for n in route.nodes] + [depot.x]
+        ys = [depot.y] + [n.y for n in route.nodes] + [depot.y]
+        
+        plt.plot(xs, ys, '^--', color=uav_colors[i], linewidth=2, 
+                 markersize=10, label=f'UAV-{route.vehicle_id}')
+    
+    # 標記節點類型
+    for node in problem.nodes:
+        if node.node_type == 'depot':
+            plt.scatter(node.x, node.y, c='green', marker='*', s=300, zorder=5, edgecolors='black')
+            plt.annotate('Depot', (node.x, node.y), textcoords="offset points", 
+                        xytext=(10, 10), fontsize=10, fontweight='bold')
+        elif node.node_type == 'hard_to_access':
+            plt.scatter(node.x, node.y, c='red', marker='^', s=100, zorder=4, edgecolors='black')
+        elif node.node_type == 'urgent':
+            plt.scatter(node.x, node.y, c='orange', marker='s', s=100, zorder=4, edgecolors='black')
+    
+    # 標記未服務節點
+    for node in solution.unassigned_nodes:
+        plt.scatter(node.x, node.y, c='gray', marker='x', s=150, zorder=5, linewidths=3)
+    
+    plt.xlabel('X Coordinate', fontsize=12)
+    plt.ylabel('Y Coordinate', fontsize=12)
+    plt.title(f'Solution Routes (Cost={solution.total_cost:.2f}, '
+              f'Avg Wait={solution.avg_waiting_time:.2f}min)', fontsize=14)
+    plt.legend(loc='upper right', fontsize=9)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()
+    print(f"路徑圖已儲存至: {save_path}")
 
 
 # ==================== 主程式類別 ====================
@@ -392,12 +1256,22 @@ class ChargingSchedulingProblem:
         
         for idx in self.urgent_indices:
             self.nodes[idx].node_type = 'urgent'
-            # 縮緊時間窗：從 Ready Time 開始只有 60 分鐘存活時間
-            self.nodes[idx].due_date = self.nodes[idx].ready_time + 60.0
+            # 縮緊時間窗：從 Ready Time 開始只有 TW_URGENT 分鐘存活時間
+            new_due = self.nodes[idx].ready_time + self.config.TW_URGENT
+            # 確保不超過 Depot 的關閉時間
+            self.nodes[idx].due_date = min(new_due, self.depot.due_date)
+        
+        # 為 Normal 節點設定時間窗 (TW_NORMAL 分鐘緩衝，允許慢充)
+        normal_indices = [i for i in customer_indices 
+                          if i not in self.hard_to_access_indices and i not in self.urgent_indices]
+        for idx in normal_indices:
+            new_due = self.nodes[idx].ready_time + self.config.TW_NORMAL
+            # 確保不超過 Depot 的關閉時間
+            self.nodes[idx].due_date = min(new_due, self.depot.due_date)
         
         print(f"Hard-to-Access 節點: {len(self.hard_to_access_indices)} 個")
-        print(f"Urgent 節點: {len(self.urgent_indices)} 個 (時間窗縮緊為 60 分鐘)")
-        print(f"Normal 節點: {num_customers - len(self.hard_to_access_indices) - len(self.urgent_indices)} 個")
+        print(f"Urgent 節點: {len(self.urgent_indices)} 個 (時間窗={self.config.TW_URGENT}分鐘)")
+        print(f"Normal 節點: {len(normal_indices)} 個 (時間窗={self.config.TW_NORMAL}分鐘, 允許慢充)")
     
     def calculate_distance(self, node1: Node, node2: Node, distance_type: str = 'euclidean') -> float:
         """
@@ -447,6 +1321,11 @@ class ChargingSchedulingProblem:
         """
         評估並更新路徑的時間、距離、可行性
         
+        實現 Multi-mode MCS 充電模式選擇:
+        - UAV: 永遠使用 POWER_FAST
+        - MCS + Urgent: 必須使用 POWER_FAST
+        - MCS + Normal: 優先嘗試 POWER_SLOW，若不可行則改用 POWER_FAST
+        
         Args:
             route: 要評估的路徑
         
@@ -461,6 +1340,7 @@ class ChargingSchedulingProblem:
             route.arrival_times = []
             route.departure_times = []
             route.waiting_times = []
+            route.charging_modes = []
             return True
         
         vehicle = route.vehicle_type
@@ -474,14 +1354,15 @@ class ChargingSchedulingProblem:
         # 計算時間與距離
         route.arrival_times = []
         route.departure_times = []
-        route.waiting_times = []  # 新增：記錄等待時間
+        route.waiting_times = []
+        route.charging_modes = []
         route.total_distance = 0.0
-        route.total_waiting_time = 0.0  # 新增：總等待時間
+        route.total_waiting_time = 0.0
         
         current_time = 0.0  # 從 depot 出發時間
         prev_node = self.depot
         
-        for node in route.nodes:
+        for i, node in enumerate(route.nodes):
             # 計算行駛距離與時間
             travel_time = self.calculate_travel_time(prev_node, node, vehicle)
             if vehicle == 'mcs':
@@ -497,23 +1378,66 @@ class ChargingSchedulingProblem:
                 route.is_feasible = False
                 return False
             
-            # 如果提早到達，等待至 ready_time
-            # 等待時間 = max(0, ready_time - arrival_time)
+            # 等待時間計算
             waiting_time = max(0.0, node.ready_time - arrival_time)
             service_start = max(arrival_time, node.ready_time)
             
-            # 動態計算充電時間 (根據需求電量和車輛充電功率)
-            if vehicle == 'mcs':
-                charging_power = self.mcs.POWER_FAST  # MCS 使用快充 250 kW
+            # ===== 動態充電模式選擇 =====
+            if vehicle == 'uav':
+                # UAV: 永遠使用快充
+                charging_power = self.uav.POWER_FAST
+                charging_mode = 'FAST'
             else:
-                charging_power = self.uav.POWER_FAST  # UAV 使用 50 kW
+                # MCS: 根據節點類型決定充電模式
+                if node.node_type == 'urgent':
+                    # Urgent 節點: 必須使用快充
+                    charging_power = self.mcs.POWER_FAST
+                    charging_mode = 'FAST'
+                else:
+                    # Normal/Hard-to-Access 節點: 優先嘗試慢充
+                    # 計算慢充所需時間
+                    slow_service_time = self.calculate_charging_time(node.demand, self.mcs.POWER_SLOW)
+                    slow_departure_time = service_start + slow_service_time
+                    
+                    # 檢查慢充可行性
+                    slow_feasible = True
+                    
+                    # 條件 1: 慢充是否會超過當前節點的 due_date?
+                    if slow_departure_time > node.due_date:
+                        slow_feasible = False
+                    
+                    # 條件 2: 慢充是否會導致下一個節點無法在 deadline 前到達?
+                    if slow_feasible and i + 1 < len(route.nodes):
+                        next_node = route.nodes[i + 1]
+                        travel_to_next = self.calculate_travel_time(node, next_node, vehicle)
+                        arrival_at_next = slow_departure_time + travel_to_next
+                        if arrival_at_next > next_node.due_date:
+                            slow_feasible = False
+                    
+                    # 條件 3: 慢充是否會導致無法及時返回 depot?
+                    if slow_feasible and i == len(route.nodes) - 1:
+                        travel_to_depot = self.calculate_travel_time(node, self.depot, vehicle)
+                        return_time = slow_departure_time + travel_to_depot
+                        if return_time > self.depot.due_date:
+                            slow_feasible = False
+                    
+                    # 決定充電模式
+                    if slow_feasible:
+                        charging_power = self.mcs.POWER_SLOW
+                        charging_mode = 'SLOW'
+                    else:
+                        charging_power = self.mcs.POWER_FAST
+                        charging_mode = 'FAST'
+            
+            # 計算實際服務時間
             service_time = self.calculate_charging_time(node.demand, charging_power)
             departure_time = service_start + service_time
             
             route.arrival_times.append(arrival_time)
             route.departure_times.append(departure_time)
-            route.waiting_times.append(waiting_time)  # 記錄等待時間
-            route.total_waiting_time += waiting_time  # 累加總等待時間
+            route.waiting_times.append(waiting_time)
+            route.charging_modes.append(charging_mode)
+            route.total_waiting_time += waiting_time
             
             current_time = departure_time
             prev_node = node
@@ -741,7 +1665,7 @@ def main():
     problem.print_config()
     
     # 載入資料
-    problem.load_data('R101_25.csv')
+    problem.load_data('R101.csv')
     
     # 分配節點類型
     problem.assign_node_types()
@@ -753,11 +1677,83 @@ def main():
     print(f"\nHard-to-Access 節點索引: {sorted(problem.hard_to_access_indices)}")
     print(f"Urgent 節點索引: {sorted(problem.urgent_indices)}")
     
-    # 執行 Greedy Construction Heuristic
-    solution = problem.greedy_construction()
+    # ==================== Phase 1: Greedy Construction ====================
+    print("\n" + "="*80)
+    print("Phase 1: Greedy Construction Heuristic")
+    print("="*80)
     
-    # 輸出解的摘要
-    solution.print_summary()
+    greedy_solution = problem.greedy_construction()
+    greedy_solution.print_summary()
+    
+    # 儲存 Greedy 解供後續比較
+    greedy_cost = greedy_solution.total_cost
+    greedy_avg_wait = greedy_solution.avg_waiting_time
+    greedy_coverage = greedy_solution.coverage_rate
+    greedy_mcs_routes = len(greedy_solution.mcs_routes)
+    greedy_uav_routes = len(greedy_solution.uav_routes)
+    
+    # 繪製 Greedy 解路徑
+    plot_routes(greedy_solution, problem, save_path='routes_greedy.png')
+    
+    # ==================== Phase 2: ALNS Optimization ====================
+    print("\n" + "="*80)
+    print("Phase 2: ALNS Optimization")
+    print("="*80)
+    
+    # 初始化 ALNS 求解器
+    alns_config = ALNSConfig()
+    alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
+    
+    # 執行 ALNS (可調整參數)
+    best_solution = alns.solve(
+        initial_solution=greedy_solution,
+        max_iters=1000,       # 迭代次數
+        time_limit_sec=120    # 時間限制 (秒)
+    )
+    
+    # 輸出 ALNS 最佳解摘要
+    print("\n" + "="*80)
+    print("ALNS 最佳解")
+    print("="*80)
+    best_solution.print_summary()
+    
+    # 繪製 ALNS 最佳解路徑
+    plot_routes(best_solution, problem, save_path='routes_alns.png')
+    
+    # ==================== 比較輸出 ====================
+    print("\n" + "="*80)
+    print("Greedy vs ALNS 比較")
+    print("="*80)
+    
+    print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
+    print("-" * 72)
+    
+    cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
+    print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
+          f"{cost_improve:>14.1f}%")
+    
+    wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
+    print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
+          f"{wait_improve:>14.1f}%")
+    
+    print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
+          f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
+    
+    print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
+          f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
+    
+    print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
+          f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
+    
+    print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
+          f"{len(best_solution.unassigned_nodes):>15} | "
+          f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
+    
+    print("-" * 72)
+    print(f"\n圖片已儲存:")
+    print(f"  - 節點分布圖: node_distribution.png")
+    print(f"  - Greedy 路徑: routes_greedy.png")
+    print(f"  - ALNS 路徑: routes_alns.png")
 
 
 if __name__ == "__main__":
