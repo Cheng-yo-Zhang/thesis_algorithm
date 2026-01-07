@@ -13,7 +13,7 @@ from typing import List, Set, Tuple, Callable, Dict, Optional
 @dataclass
 class MCSConfig:
     """Mobile Charging Station (MCS) 參數配置"""
-    SPEED: float = (12 * 3.6) / 60.0   # km/min (原速度 12 m/s)
+    SPEED: float = (12 * 3.6) / 60.0    # km/min (原速度 12 m/s)
     CAPACITY: float = 270.0             # kWh 電池容量
     POWER_FAST: float = 250.0           # kW (Super Fast Charging)
     POWER_SLOW: float = 11.0            # kW (AC Slow Charging)
@@ -226,7 +226,9 @@ class Solution:
         
         # 2. 計算等待時間
         self.total_waiting_time = sum(r.total_waiting_time for r in all_routes)
-        served_count = sum(len(r.nodes) for r in all_routes)
+        served_count = 0
+        for r in all_routes:
+            served_count += sum(1 for node in r.nodes if node.id != 0)
         self.avg_waiting_time = self.total_waiting_time / served_count if served_count > 0 else 0.0
         
         # 3. 計算覆蓋率
@@ -312,32 +314,32 @@ class Solution:
         print("="*60)
         
         # 車輛配置
-        print("\n【車輛配置】")
-        print(f"  MCS 路徑數: {len(self.mcs_routes)}")
-        print(f"  UAV 路徑數: {len(self.uav_routes)}")
+        print("\n" + "車輛配置")
+        print(f"MCS路徑數: {len(self.mcs_routes)}")
+        print(f"UAV路徑數: {len(self.uav_routes)}")
         
         # 目標函數分解
-        print("\n【目標函數 (階層式)】")
-        print(f"  總成本: {self.total_cost:.2f}")
+        print("\n" + "目標函數 (階層式)")
+        print(f"總成本: {self.total_cost:.2f}")
         unassigned_penalty = self.PENALTY_UNASSIGNED * len(self.unassigned_nodes)
         waiting_cost = self.WEIGHT_WAITING * self.avg_waiting_time
         distance_cost = self.WEIGHT_DISTANCE * self.total_distance
-        print(f"  ├─ 未服務懲罰: {unassigned_penalty:.2f} ({len(self.unassigned_nodes)} × {self.PENALTY_UNASSIGNED})")
-        print(f"  ├─ 等待成本: {waiting_cost:.2f} ({self.avg_waiting_time:.2f} min × {self.WEIGHT_WAITING})")
-        print(f"  └─ 距離成本: {distance_cost:.2f} ({self.total_distance:.2f} km × {self.WEIGHT_DISTANCE})")
+        print(f"未服務懲罰: {unassigned_penalty:.2f} ({len(self.unassigned_nodes)} × {self.PENALTY_UNASSIGNED})")
+        print(f"等待成本: {waiting_cost:.2f} ({self.avg_waiting_time:.2f} min × {self.WEIGHT_WAITING})")
+        print(f"距離成本: {distance_cost:.2f} ({self.total_distance:.2f} km × {self.WEIGHT_DISTANCE})")
         
         # 關鍵指標
-        print("\n【關鍵指標】")
-        print(f"  平均等待時間: {self.avg_waiting_time:.2f} 分鐘 ← 主要目標")
-        print(f"  覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers})")
-        print(f"  可行解: {'是' if self.is_feasible else '否 (有未服務節點)'}")
+        print("\n" + "關鍵指標")
+        print(f"平均等待時間: {self.avg_waiting_time:.2f} 分鐘")
+        print(f"覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers})")
+        print(f"可行解: {'是' if self.is_feasible else '否 (有未服務節點)'}")
         
         # 其他指標
-        print("\n【其他指標】")
-        print(f"  總距離: {self.total_distance:.2f} km")
-        print(f"  總時間: {self.total_time:.2f} 分鐘")
-        print(f"  總等待時間: {self.total_waiting_time:.2f} 分鐘")
-        print(f"  彈性分數 (CV): {self.flexibility_score:.3f}")
+        print("\n" + "其他指標")
+        # print(f"總距離: {self.total_distance:.2f} km")
+        # print(f"總時間: {self.total_time:.2f} 分鐘")
+        print(f"總等待時間: {self.total_waiting_time:.2f} 分鐘")
+        # print(f"彈性分數 (CV): {self.flexibility_score:.3f}")
         
         # MCS 充電模式統計
         mcs_fast_count = 0
@@ -349,28 +351,28 @@ class Solution:
                 elif mode == 'SLOW':
                     mcs_slow_count += 1
         
-        print("\n【MCS 充電模式統計】")
+        print("\n" + "MCS 充電模式統計")
         print(f"  Fast Charging (250 kW): {mcs_fast_count} 次")
         print(f"  Slow Charging (11 kW): {mcs_slow_count} 次")
         if mcs_fast_count + mcs_slow_count > 0:
             slow_ratio = mcs_slow_count / (mcs_fast_count + mcs_slow_count) * 100
-            print(f"  慢充比例: {slow_ratio:.1f}%")
+            print(f"慢充比例: {slow_ratio:.1f}%")
         
         # 路徑詳情
         if self.mcs_routes:
-            print("\n【MCS 路徑詳情】")
+            print("\n" + "MCS 路徑詳情")
             for route in self.mcs_routes:
                 mode_summary = f"[F:{route.charging_modes.count('FAST')}/S:{route.charging_modes.count('SLOW')}]"
-                print(f"  {route.vehicle_type.upper()}-{route.vehicle_id}: "
+                print(f"{route.vehicle_type.upper()}-{route.vehicle_id + 1}: "
                       f"節點={route.get_node_ids()}, "
                       f"距離={route.total_distance:.1f}km, "
                       f"等待={route.total_waiting_time:.1f}min, "
                       f"模式={mode_summary}")
         
         if self.uav_routes:
-            print("\n【UAV 路徑詳情】")
+            print("\n" + "UAV 路徑詳情")
             for route in self.uav_routes:
-                print(f"  {route.vehicle_type.upper()}-{route.vehicle_id}: "
+                print(f"{route.vehicle_type.upper()}-{route.vehicle_id + 1}: "
                       f"節點={route.get_node_ids()}, "
                       f"距離={route.total_distance:.1f}km, "
                       f"等待={route.total_waiting_time:.1f}min")
@@ -1152,7 +1154,7 @@ def plot_routes(solution: Solution, problem: 'ChargingSchedulingProblem',
         ys = [depot.y] + [n.y for n in route.nodes] + [depot.y]
         
         plt.plot(xs, ys, 'o-', color=mcs_colors[i], linewidth=2, 
-                 markersize=8, label=f'MCS-{route.vehicle_id}')
+                 markersize=8, label=f'MCS-{route.vehicle_id + 1}')
     
     # 繪製 UAV 路徑 (虛線表示飛行)
     for i, route in enumerate(solution.uav_routes):
@@ -1163,7 +1165,7 @@ def plot_routes(solution: Solution, problem: 'ChargingSchedulingProblem',
         ys = [depot.y] + [n.y for n in route.nodes] + [depot.y]
         
         plt.plot(xs, ys, '^--', color=uav_colors[i], linewidth=2, 
-                 markersize=10, label=f'UAV-{route.vehicle_id}')
+                 markersize=10, label=f'UAV-{route.vehicle_id + 1}')
     
     # 標記節點類型
     for node in problem.nodes:
@@ -1235,7 +1237,7 @@ class ChargingSchedulingProblem:
             
             self.nodes.append(node)
         
-        print(f"載入 {len(self.nodes)} 個節點 (含 depot)")
+        print(f"載入 {len(self.nodes) - 1} 個節點")
     
     def assign_node_types(self) -> None:
         """隨機分配節點類型，並為 Urgent 節點縮緊時間窗"""
@@ -1634,7 +1636,7 @@ class ChargingSchedulingProblem:
         plt.xlabel('X Coordinate')
         plt.ylabel('Y Coordinate')
         plt.title('R101 Node Distribution')
-        plt.legend()
+        plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=4, frameon=False)
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(save_path, dpi=150)
@@ -1642,7 +1644,7 @@ class ChargingSchedulingProblem:
     
     def print_config(self) -> None:
         """輸出參數配置"""
-        print("\n" + "="*50)
+        # print("\n" + "="*50)
         print("MCS 參數配置:")
         print(f"  速度: {self.mcs.SPEED:.3f} km/min ({self.mcs.SPEED * 60:.1f} km/h)")
         print(f"  電池容量: {self.mcs.CAPACITY} kWh")
@@ -1653,7 +1655,7 @@ class ChargingSchedulingProblem:
         print(f"  電池容量: {self.uav.CAPACITY} kWh")
         print(f"  快充功率: {self.uav.POWER_FAST} kW")
         print(f"  最大載電量: {self.uav.MAX_PAYLOAD} kWh")
-        print("="*50 + "\n")
+        print("="*80 + "\n")
 
 
 # ==================== 主程式入口 ====================
@@ -1665,7 +1667,7 @@ def main():
     problem.print_config()
     
     # 載入資料
-    problem.load_data('R101.csv')
+    problem.load_data('R101_25.csv')
     
     # 分配節點類型
     problem.assign_node_types()
@@ -1674,8 +1676,8 @@ def main():
     problem.plot_nodes()
     
     # 輸出節點資訊
-    print(f"\nHard-to-Access 節點索引: {sorted(problem.hard_to_access_indices)}")
-    print(f"Urgent 節點索引: {sorted(problem.urgent_indices)}")
+    # print(f"\nHard-to-Access 節點索引: {sorted(problem.hard_to_access_indices)}")
+    # print(f"Urgent 節點索引: {sorted(problem.urgent_indices)}")
     
     # ==================== Phase 1: Greedy Construction ====================
     print("\n" + "="*80)
@@ -1695,65 +1697,65 @@ def main():
     # 繪製 Greedy 解路徑
     plot_routes(greedy_solution, problem, save_path='routes_greedy.png')
     
-    # ==================== Phase 2: ALNS Optimization ====================
-    print("\n" + "="*80)
-    print("Phase 2: ALNS Optimization")
-    print("="*80)
+    # # ==================== Phase 2: ALNS Optimization ====================
+    # print("\n" + "="*80)
+    # print("Phase 2: ALNS Optimization")
+    # print("="*80)
     
-    # 初始化 ALNS 求解器
-    alns_config = ALNSConfig()
-    alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
+    # # 初始化 ALNS 求解器
+    # alns_config = ALNSConfig()
+    # alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
     
-    # 執行 ALNS (可調整參數)
-    best_solution = alns.solve(
-        initial_solution=greedy_solution,
-        max_iters=1000,       # 迭代次數
-        time_limit_sec=120    # 時間限制 (秒)
-    )
+    # # 執行 ALNS (可調整參數)
+    # best_solution = alns.solve(
+    #     initial_solution=greedy_solution,
+    #     max_iters=1000,       # 迭代次數
+    #     time_limit_sec=120    # 時間限制 (秒)
+    # )
     
-    # 輸出 ALNS 最佳解摘要
-    print("\n" + "="*80)
-    print("ALNS 最佳解")
-    print("="*80)
-    best_solution.print_summary()
+    # # 輸出 ALNS 最佳解摘要
+    # print("\n" + "="*80)
+    # print("ALNS 最佳解")
+    # print("="*80)
+    # best_solution.print_summary()
     
-    # 繪製 ALNS 最佳解路徑
-    plot_routes(best_solution, problem, save_path='routes_alns.png')
+    # # 繪製 ALNS 最佳解路徑
+    # plot_routes(best_solution, problem, save_path='routes_alns.png')
     
-    # ==================== 比較輸出 ====================
-    print("\n" + "="*80)
-    print("Greedy vs ALNS 比較")
-    print("="*80)
+    # # ==================== 比較輸出 ====================
+    # print("\n" + "="*80)
+    # print("Greedy vs ALNS 比較")
+    # print("="*80)
     
-    print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
-    print("-" * 72)
+    # print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
+    # print("-" * 72)
     
-    cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
-    print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
-          f"{cost_improve:>14.1f}%")
+    # cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
+    # print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
+    #       f"{cost_improve:>14.1f}%")
     
-    wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
-    print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
-          f"{wait_improve:>14.1f}%")
+    # wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
+    # print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
+    #       f"{wait_improve:>14.1f}%")
     
-    print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
-          f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
+    # print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
+    #       f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
     
-    print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
-          f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
+    # print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
+    #       f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
     
-    print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
-          f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
+    # print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
+    #       f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
     
-    print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
-          f"{len(best_solution.unassigned_nodes):>15} | "
-          f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
+    # print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
+    #       f"{len(best_solution.unassigned_nodes):>15} | "
+    #       f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
     
-    print("-" * 72)
-    print(f"\n圖片已儲存:")
-    print(f"  - 節點分布圖: node_distribution.png")
-    print(f"  - Greedy 路徑: routes_greedy.png")
-    print(f"  - ALNS 路徑: routes_alns.png")
+    # print("-" * 72)
+    # print(f"\n圖片已儲存:")
+    # print(f"  - 節點分布圖: node_distribution.png")
+    # print(f"  - Greedy 路徑: routes_greedy.png")
+    # print(f"  - ALNS 路徑: routes_alns.png")
 
 
 if __name__ == "__main__":
