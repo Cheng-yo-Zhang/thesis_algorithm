@@ -95,11 +95,13 @@ class Route:
         self.nodes: List[Node] = []  # 路徑上的節點序列 (不含 depot)
         self.departure_times: List[float] = []  # 各節點的出發時間
         self.arrival_times: List[float] = []  # 各節點的到達時間
-        self.waiting_times: List[float] = []  # 各節點的等待時間
+        self.user_waiting_times: List[float] = []  # 各節點的用戶等待時間 (用戶發出請求後等 MCS 到達)
+        self.mcs_waiting_times: List[float] = []  # 各節點的 MCS 等待時間 (MCS 到達後等用戶準備好)
         self.charging_modes: List[str] = []  # 各節點的充電模式 ('FAST' 或 'SLOW')
         self.total_distance: float = 0.0
         self.total_time: float = 0.0
-        self.total_waiting_time: float = 0.0  # 路徑總等待時間
+        self.total_user_waiting_time: float = 0.0  # 路徑總用戶等待時間
+        self.total_mcs_waiting_time: float = 0.0  # 路徑總 MCS 等待時間
         self.total_demand: float = 0.0
         self.is_feasible: bool = True
     
@@ -138,11 +140,13 @@ class Route:
         new_route.nodes = self.nodes.copy()
         new_route.departure_times = self.departure_times.copy()
         new_route.arrival_times = self.arrival_times.copy()
-        new_route.waiting_times = self.waiting_times.copy()
+        new_route.user_waiting_times = self.user_waiting_times.copy()
+        new_route.mcs_waiting_times = self.mcs_waiting_times.copy()
         new_route.charging_modes = self.charging_modes.copy()
         new_route.total_distance = self.total_distance
         new_route.total_time = self.total_time
-        new_route.total_waiting_time = self.total_waiting_time
+        new_route.total_user_waiting_time = self.total_user_waiting_time
+        new_route.total_mcs_waiting_time = self.total_mcs_waiting_time
         new_route.total_demand = self.total_demand
         new_route.is_feasible = self.is_feasible
         return new_route
@@ -156,9 +160,10 @@ class Solution:
     """解的容器 - 包含多條路徑"""
     
     # ===== 階層式目標函數權重 (適用於 ALNS) =====
-    # 設計原則：未服務懲罰 >> 等待時間 >> 距離
+    # 設計原則：未服務懲罰 >> 用戶等待時間 >> 距離
+    # 目標：最小化用戶等待時間 (用戶發出充電請求後，等待 MCS 到達的時間)
     PENALTY_UNASSIGNED: float = 10000.0   # 未服務節點懲罰 (極大，確保不作弊)
-    WEIGHT_WAITING: float = 1.0           # 平均等待時間權重 (主要目標)
+    WEIGHT_WAITING: float = 1.0           # 平均用戶等待時間權重 (主要目標)
     WEIGHT_DISTANCE: float = 0.01         # 距離權重 (tie-breaker，避免繞路)
     
     def __init__(self):
@@ -205,11 +210,16 @@ class Solution:
         計算階層式目標函數值 (適用於 ALNS)
         
         Objective Function (Hierarchical):
-            Cost = α × 未服務節點數 + β × 平均等待時間 + γ × 總距離
+            Cost = α × 未服務節點數 + β × 平均用戶等待時間 + γ × 總距離
+        
+        用戶等待時間定義：
+            - 用戶在 READY_TIME 發出充電請求
+            - 用戶等待時間 = max(0, MCS到達時間 - READY_TIME)
+            - 若 MCS 比 READY_TIME 早到，用戶不需等待 (等待時間=0)
         
         設計原則：
             - α (10000): 極大懲罰，確保 ALNS 不會「丟棄客戶」來作弊
-            - β (1.0): 主要最佳化目標
+            - β (1.0): 主要最佳化目標 (最小化用戶等待時間)
             - γ (0.01): Tie-breaker，避免為了省 1 分鐘而繞路 50 公里
         
         Args:
@@ -224,8 +234,8 @@ class Solution:
         self.total_distance = sum(r.total_distance for r in all_routes)
         self.total_time = sum(r.total_time for r in all_routes)
         
-        # 2. 計算等待時間
-        self.total_waiting_time = sum(r.total_waiting_time for r in all_routes)
+        # 2. 計算用戶等待時間 (用戶發出請求後等待 MCS 到達的時間)
+        self.total_waiting_time = sum(r.total_user_waiting_time for r in all_routes)
         served_count = 0
         for r in all_routes:
             served_count += sum(1 for node in r.nodes if node.id != 0)
@@ -243,8 +253,7 @@ class Solution:
         self.flexibility_score = self._calculate_flexibility_score()
         
         # ===== 階層式目標函數 =====
-        # 情境 A 防護：未服務節點有極大懲罰，ALNS 絕不會選擇丟棄客戶
-        # 情境 B 防護：距離有小權重，繞路 50km 會增加 0.5 成本，不划算
+        # 目標：最小化用戶等待時間
         unassigned_penalty = self.PENALTY_UNASSIGNED * len(self.unassigned_nodes)
         waiting_cost = self.WEIGHT_WAITING * self.avg_waiting_time
         distance_cost = self.WEIGHT_DISTANCE * self.total_distance
@@ -330,7 +339,7 @@ class Solution:
         
         # 關鍵指標
         print("\n" + "關鍵指標")
-        print(f"平均等待時間: {self.avg_waiting_time:.2f} 分鐘")
+        print(f"平均用戶等待時間: {self.avg_waiting_time:.2f} 分鐘")
         print(f"覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers})")
         print(f"可行解: {'是' if self.is_feasible else '否 (有未服務節點)'}")
         
@@ -338,7 +347,7 @@ class Solution:
         print("\n" + "其他指標")
         # print(f"總距離: {self.total_distance:.2f} km")
         # print(f"總時間: {self.total_time:.2f} 分鐘")
-        print(f"總等待時間: {self.total_waiting_time:.2f} 分鐘")
+        print(f"總用戶等待時間: {self.total_waiting_time:.2f} 分鐘")
         # print(f"彈性分數 (CV): {self.flexibility_score:.3f}")
         
         # MCS 充電模式統計
@@ -366,7 +375,7 @@ class Solution:
                 print(f"{route.vehicle_type.upper()}-{route.vehicle_id + 1}: "
                       f"節點={route.get_node_ids()}, "
                       f"距離={route.total_distance:.1f}km, "
-                      f"等待={route.total_waiting_time:.1f}min, "
+                      f"用戶等待={route.total_user_waiting_time:.1f}min, "
                       f"模式={mode_summary}")
         
         if self.uav_routes:
@@ -375,7 +384,7 @@ class Solution:
                 print(f"{route.vehicle_type.upper()}-{route.vehicle_id + 1}: "
                       f"節點={route.get_node_ids()}, "
                       f"距離={route.total_distance:.1f}km, "
-                      f"等待={route.total_waiting_time:.1f}min")
+                      f"用戶等待={route.total_user_waiting_time:.1f}min")
         
         print("\n" + "="*60)
 
@@ -1220,7 +1229,16 @@ class ChargingSchedulingProblem:
         """讀取 CSV 資料"""
         df = pd.read_csv(filepath)
         
+        # 檢查是否有 NODE_TYPE 欄位
+        has_node_type = 'NODE_TYPE' in df.columns
+        
         for idx, row in df.iterrows():
+            # 讀取節點類型 (若有)
+            if has_node_type:
+                node_type = str(row['NODE_TYPE']).strip().lower()
+            else:
+                node_type = 'normal'
+            
             node = Node(
                 id=int(row['CUST NO.']),
                 x=float(row['XCOORD.']),
@@ -1228,52 +1246,78 @@ class ChargingSchedulingProblem:
                 demand=float(row['DEMAND']),
                 ready_time=float(row['READY TIME']),
                 due_date=float(row['DUE DATE']),
-                service_time=float(row['SERVICE TIME'])
+                service_time=float(row['SERVICE TIME']),
+                node_type=node_type
             )
             
+            # 第一個節點為 depot
             if idx == 0:
                 node.node_type = 'depot'
                 self.depot = node
             
             self.nodes.append(node)
         
+        # 統計節點類型
+        type_counts = {}
+        for node in self.nodes:
+            t = node.node_type
+            type_counts[t] = type_counts.get(t, 0) + 1
+        
         print(f"載入 {len(self.nodes) - 1} 個節點")
+        if has_node_type:
+            print(f"節點類型分布: {type_counts}")
     
-    def assign_node_types(self) -> None:
-        """隨機分配節點類型，並為 Urgent 節點縮緊時間窗"""
+    def assign_node_types(self, use_csv_types: bool = True) -> None:
+        """
+        分配節點類型
+        
+        Args:
+            use_csv_types: 是否使用 CSV 中已定義的節點類型。
+                          若為 True，則根據已讀取的 node_type 建立索引集合。
+                          若為 False，則隨機分配節點類型（舊行為）。
+        """
         customer_indices = [i for i in range(1, len(self.nodes))]
         num_customers = len(customer_indices)
         
-        # 隨機選取 Hard-to-Access 節點
-        num_hard = int(num_customers * self.config.HARD_TO_ACCESS_RATIO)
-        self.hard_to_access_indices = set(random.sample(customer_indices, num_hard))
-        
-        for idx in self.hard_to_access_indices:
-            self.nodes[idx].node_type = 'hard_to_access'
-        
-        # 從剩餘節點選取 Urgent 節點
-        remaining = [i for i in customer_indices if i not in self.hard_to_access_indices]
-        num_urgent = int(num_customers * self.config.URGENT_RATIO)
-        self.urgent_indices = set(random.sample(remaining, num_urgent))
-        
-        for idx in self.urgent_indices:
-            self.nodes[idx].node_type = 'urgent'
-            # 縮緊時間窗：從 Ready Time 開始只有 TW_URGENT 分鐘存活時間
-            new_due = self.nodes[idx].ready_time + self.config.TW_URGENT
-            # 確保不超過 Depot 的關閉時間
-            self.nodes[idx].due_date = min(new_due, self.depot.due_date)
-        
-        # 為 Normal 節點設定時間窗 (TW_NORMAL 分鐘緩衝，允許慢充)
-        normal_indices = [i for i in customer_indices 
-                          if i not in self.hard_to_access_indices and i not in self.urgent_indices]
-        for idx in normal_indices:
-            new_due = self.nodes[idx].ready_time + self.config.TW_NORMAL
-            # 確保不超過 Depot 的關閉時間
-            self.nodes[idx].due_date = min(new_due, self.depot.due_date)
+        if use_csv_types:
+            # 根據已讀取的 node_type 建立索引集合
+            self.hard_to_access_indices = set(
+                i for i in customer_indices if self.nodes[i].node_type == 'hard_to_access'
+            )
+            self.urgent_indices = set(
+                i for i in customer_indices if self.nodes[i].node_type == 'urgent'
+            )
+            normal_indices = [
+                i for i in customer_indices if self.nodes[i].node_type == 'normal'
+            ]
+        else:
+            # 舊行為：隨機分配節點類型
+            num_hard = int(num_customers * self.config.HARD_TO_ACCESS_RATIO)
+            self.hard_to_access_indices = set(random.sample(customer_indices, num_hard))
+            
+            for idx in self.hard_to_access_indices:
+                self.nodes[idx].node_type = 'hard_to_access'
+            
+            remaining = [i for i in customer_indices if i not in self.hard_to_access_indices]
+            num_urgent = int(num_customers * self.config.URGENT_RATIO)
+            self.urgent_indices = set(random.sample(remaining, num_urgent))
+            
+            for idx in self.urgent_indices:
+                self.nodes[idx].node_type = 'urgent'
+                new_due = self.nodes[idx].ready_time + self.config.TW_URGENT
+                self.nodes[idx].due_date = min(new_due, self.depot.due_date)
+            
+            normal_indices = [
+                i for i in customer_indices 
+                if i not in self.hard_to_access_indices and i not in self.urgent_indices
+            ]
+            for idx in normal_indices:
+                new_due = self.nodes[idx].ready_time + self.config.TW_NORMAL
+                self.nodes[idx].due_date = min(new_due, self.depot.due_date)
         
         print(f"Hard-to-Access 節點: {len(self.hard_to_access_indices)} 個")
-        print(f"Urgent 節點: {len(self.urgent_indices)} 個 (時間窗={self.config.TW_URGENT}分鐘)")
-        print(f"Normal 節點: {len(normal_indices)} 個 (時間窗={self.config.TW_NORMAL}分鐘, 允許慢充)")
+        print(f"Urgent 節點: {len(self.urgent_indices)} 個")
+        print(f"Normal 節點: {len(normal_indices)} 個")
     
     def calculate_distance(self, node1: Node, node2: Node, distance_type: str = 'euclidean') -> float:
         """
@@ -1341,7 +1385,8 @@ class ChargingSchedulingProblem:
             route.total_waiting_time = 0.0
             route.arrival_times = []
             route.departure_times = []
-            route.waiting_times = []
+            route.user_waiting_times = []
+            route.mcs_waiting_times = []
             route.charging_modes = []
             return True
         
@@ -1356,10 +1401,12 @@ class ChargingSchedulingProblem:
         # 計算時間與距離
         route.arrival_times = []
         route.departure_times = []
-        route.waiting_times = []
+        route.user_waiting_times = []
+        route.mcs_waiting_times = []
         route.charging_modes = []
         route.total_distance = 0.0
-        route.total_waiting_time = 0.0
+        route.total_user_waiting_time = 0.0
+        route.total_mcs_waiting_time = 0.0
         
         current_time = 0.0  # 從 depot 出發時間
         prev_node = self.depot
@@ -1380,8 +1427,15 @@ class ChargingSchedulingProblem:
                 route.is_feasible = False
                 return False
             
-            # 等待時間計算
-            waiting_time = max(0.0, node.ready_time - arrival_time)
+            # ===== 等待時間計算 =====
+            # 用戶等待時間: 用戶在 READY_TIME 發出請求，等待 MCS 到達
+            # 若 MCS 在 READY_TIME 之後到達，用戶需要等待
+            user_waiting_time = max(0.0, arrival_time - node.ready_time)
+            
+            # MCS 等待時間: MCS 到達後，等待用戶準備好 (READY_TIME)
+            # 若 MCS 在 READY_TIME 之前到達，MCS 需要等待
+            mcs_waiting_time = max(0.0, node.ready_time - arrival_time)
+            
             service_start = max(arrival_time, node.ready_time)
             
             # ===== 動態充電模式選擇 =====
@@ -1437,9 +1491,11 @@ class ChargingSchedulingProblem:
             
             route.arrival_times.append(arrival_time)
             route.departure_times.append(departure_time)
-            route.waiting_times.append(waiting_time)
+            route.user_waiting_times.append(user_waiting_time)
+            route.mcs_waiting_times.append(mcs_waiting_time)
             route.charging_modes.append(charging_mode)
-            route.total_waiting_time += waiting_time
+            route.total_user_waiting_time += user_waiting_time
+            route.total_mcs_waiting_time += mcs_waiting_time
             
             current_time = departure_time
             prev_node = node
@@ -1666,11 +1722,11 @@ def main():
     # 輸出參數配置
     problem.print_config()
     
-    # 載入資料
-    problem.load_data('R101_25.csv')
+    # 載入資料 (使用 mixed_instance.csv，節點類型已在 CSV 中定義)
+    problem.load_data('mixed_instance.csv')
     
-    # 分配節點類型
-    problem.assign_node_types()
+    # 分配節點類型 (使用 CSV 中的類型定義)
+    problem.assign_node_types(use_csv_types=True)
     
     # 繪製節點分布圖
     problem.plot_nodes()
