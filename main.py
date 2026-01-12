@@ -408,6 +408,9 @@ class DistanceMatrix:
         self.n = n
         self.nodes = nodes
         
+        # 建立 node.id -> 列表索引 的映射
+        self.id_to_idx = {node.id: idx for idx, node in enumerate(nodes)}
+        
         # 預計算距離矩陣
         self.manhattan = np.zeros((n, n))  # MCS 使用
         self.euclidean = np.zeros((n, n))  # UAV 使用
@@ -422,10 +425,12 @@ class DistanceMatrix:
     
     def get_distance(self, node1: Node, node2: Node, vehicle: str = 'mcs') -> float:
         """取得兩節點間距離"""
+        idx1 = self.id_to_idx[node1.id]
+        idx2 = self.id_to_idx[node2.id]
         if vehicle == 'mcs':
-            return self.manhattan[node1.id, node2.id]
+            return self.manhattan[idx1, idx2]
         else:
-            return self.euclidean[node1.id, node2.id]
+            return self.euclidean[idx1, idx2]
     
     def get_travel_time(self, node1: Node, node2: Node, vehicle: str, 
                         mcs_speed: float, uav_speed: float) -> float:
@@ -595,7 +600,7 @@ class ALNSSolver:
                 dist_saving = dist_before - dist_after
                 
                 # 等待時間貢獻
-                waiting_cost = route.waiting_times[pos] if pos < len(route.waiting_times) else 0.0
+                waiting_cost = route.mcs_waiting_times[pos] if pos < len(route.mcs_waiting_times) else 0.0
                 
                 # 邊際成本：距離 + 等待 (要移除成本高的)
                 # 注意：這裡用「負的節省」作為成本，所以節省越多的反而成本越低
@@ -715,7 +720,7 @@ class ALNSSolver:
         cfg = self.config
         
         # 空間距離 (使用歐式距離)
-        dist = self.dist_matrix.euclidean[node1.id, node2.id]
+        dist = self.dist_matrix.get_distance(node1, node2, vehicle='uav')
         
         # 時間窗差異
         time_diff = abs(node1.due_date - node2.due_date)
@@ -1753,65 +1758,65 @@ def main():
     # 繪製 Greedy 解路徑
     plot_routes(greedy_solution, problem, save_path='routes_greedy.png')
     
-    # # ==================== Phase 2: ALNS Optimization ====================
-    # print("\n" + "="*80)
-    # print("Phase 2: ALNS Optimization")
-    # print("="*80)
+    # ==================== Phase 2: ALNS Optimization ====================
+    print("\n" + "="*80)
+    print("Phase 2: ALNS Optimization")
+    print("="*80)
     
-    # # 初始化 ALNS 求解器
-    # alns_config = ALNSConfig()
-    # alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
+    # 初始化 ALNS 求解器
+    alns_config = ALNSConfig()
+    alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
     
-    # # 執行 ALNS (可調整參數)
-    # best_solution = alns.solve(
-    #     initial_solution=greedy_solution,
-    #     max_iters=1000,       # 迭代次數
-    #     time_limit_sec=120    # 時間限制 (秒)
-    # )
+    # 執行 ALNS (可調整參數)
+    best_solution = alns.solve(
+        initial_solution=greedy_solution,
+        max_iters=1000,       # 迭代次數
+        time_limit_sec=120    # 時間限制 (秒)
+    )
     
-    # # 輸出 ALNS 最佳解摘要
-    # print("\n" + "="*80)
-    # print("ALNS 最佳解")
-    # print("="*80)
-    # best_solution.print_summary()
+    # 輸出 ALNS 最佳解摘要
+    print("\n" + "="*80)
+    print("ALNS 最佳解")
+    print("="*80)
+    best_solution.print_summary()
     
-    # # 繪製 ALNS 最佳解路徑
-    # plot_routes(best_solution, problem, save_path='routes_alns.png')
+    # 繪製 ALNS 最佳解路徑
+    plot_routes(best_solution, problem, save_path='routes_alns.png')
     
-    # # ==================== 比較輸出 ====================
-    # print("\n" + "="*80)
-    # print("Greedy vs ALNS 比較")
-    # print("="*80)
+    # ==================== 比較輸出 ====================
+    print("\n" + "="*80)
+    print("Greedy vs ALNS 比較")
+    print("="*80)
     
-    # print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
-    # print("-" * 72)
+    print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
+    print("-" * 72)
     
-    # cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
-    # print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
-    #       f"{cost_improve:>14.1f}%")
+    cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
+    print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
+          f"{cost_improve:>14.1f}%")
     
-    # wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
-    # print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
-    #       f"{wait_improve:>14.1f}%")
+    wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
+    print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
+          f"{wait_improve:>14.1f}%")
     
-    # print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
-    #       f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
+    print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
+          f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
     
-    # print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
-    #       f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
+    print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
+          f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
     
-    # print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
-    #       f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
+    print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
+          f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
     
-    # print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
-    #       f"{len(best_solution.unassigned_nodes):>15} | "
-    #       f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
+    print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
+          f"{len(best_solution.unassigned_nodes):>15} | "
+          f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
     
-    # print("-" * 72)
-    # print(f"\n圖片已儲存:")
-    # print(f"  - 節點分布圖: node_distribution.png")
-    # print(f"  - Greedy 路徑: routes_greedy.png")
-    # print(f"  - ALNS 路徑: routes_alns.png")
+    print("-" * 72)
+    print(f"\n圖片已儲存:")
+    print(f"  - 節點分布圖: node_distribution.png")
+    print(f"  - Greedy 路徑: routes_greedy.png")
+    print(f"  - ALNS 路徑: routes_alns.png")
 
 
 if __name__ == "__main__":
