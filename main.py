@@ -23,19 +23,15 @@ class MCSConfig:
 class UAVConfig:
     """Unmanned Aerial Vehicle (UAV) 參數配置"""
     SPEED: float = 60.0 / 60.0          # km/min (60 km/h)
-    CAPACITY: float = 15.0              # kWh 電池容量
+    CAPACITY: float = 1000000.0         # kWh 電池容量
     POWER_FAST: float = 50.0            # kW 快充功率
-    MAX_PAYLOAD: float = 12.0           # kWh 最大載電量
+    MAX_PAYLOAD: float = 50.0           # kWh 最大載電量 (需足以服務 hard_to_access 節點)
 
 
 @dataclass
 class ProblemConfig:
     """問題實例參數配置"""
-    HARD_TO_ACCESS_RATIO: float = 0.10  # Hard-to-Access 節點比例
-    URGENT_RATIO: float = 0.20          # Urgent 節點比例
     RANDOM_SEED: int = 42               # 隨機種子
-    TW_URGENT: float = 60.0             # Urgent 節點時間窗寬度 (分鐘)
-    TW_NORMAL: float = 240.0            # Normal 節點時間窗寬度 (分鐘, 4小時)
 
 
 @dataclass
@@ -1759,64 +1755,64 @@ def main():
     plot_routes(greedy_solution, problem, save_path='routes_greedy.png')
     
     # ==================== Phase 2: ALNS Optimization ====================
-    print("\n" + "="*80)
-    print("Phase 2: ALNS Optimization")
-    print("="*80)
+    # print("\n" + "="*80)
+    # print("Phase 2: ALNS Optimization")
+    # print("="*80)
     
-    # 初始化 ALNS 求解器
-    alns_config = ALNSConfig()
-    alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
+    # # 初始化 ALNS 求解器
+    # alns_config = ALNSConfig()
+    # alns = ALNSSolver(problem, config=alns_config, seed=problem.config.RANDOM_SEED)
     
-    # 執行 ALNS (可調整參數)
-    best_solution = alns.solve(
-        initial_solution=greedy_solution,
-        max_iters=1000,       # 迭代次數
-        time_limit_sec=120    # 時間限制 (秒)
-    )
+    # # 執行 ALNS (可調整參數)
+    # best_solution = alns.solve(
+    #     initial_solution=greedy_solution,
+    #     max_iters=1000,       # 迭代次數
+    #     time_limit_sec=120    # 時間限制 (秒)
+    # )
     
-    # 輸出 ALNS 最佳解摘要
-    print("\n" + "="*80)
-    print("ALNS 最佳解")
-    print("="*80)
-    best_solution.print_summary()
+    # # 輸出 ALNS 最佳解摘要
+    # print("\n" + "="*80)
+    # print("ALNS 最佳解")
+    # print("="*80)
+    # best_solution.print_summary()
     
-    # 繪製 ALNS 最佳解路徑
-    plot_routes(best_solution, problem, save_path='routes_alns.png')
+    # # 繪製 ALNS 最佳解路徑
+    # plot_routes(best_solution, problem, save_path='routes_alns.png')
     
-    # ==================== 比較輸出 ====================
-    print("\n" + "="*80)
-    print("Greedy vs ALNS 比較")
-    print("="*80)
+    # # ==================== 比較輸出 ====================
+    # print("\n" + "="*80)
+    # print("Greedy vs ALNS 比較")
+    # print("="*80)
     
-    print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
-    print("-" * 72)
+    # print(f"\n{'指標':<20} | {'Greedy':>15} | {'ALNS':>15} | {'改善幅度':>15}")
+    # print("-" * 72)
     
-    cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
-    print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
-          f"{cost_improve:>14.1f}%")
+    # cost_improve = (greedy_cost - best_solution.total_cost) / greedy_cost * 100 if greedy_cost > 0 else 0
+    # print(f"{'總成本':<20} | {greedy_cost:>15.2f} | {best_solution.total_cost:>15.2f} | "
+    #       f"{cost_improve:>14.1f}%")
     
-    wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
-    print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
-          f"{wait_improve:>14.1f}%")
+    # wait_improve = (greedy_avg_wait - best_solution.avg_waiting_time) / greedy_avg_wait * 100 if greedy_avg_wait > 0 else 0
+    # print(f"{'平均等待時間 (min)':<20} | {greedy_avg_wait:>15.2f} | {best_solution.avg_waiting_time:>15.2f} | "
+    #       f"{wait_improve:>14.1f}%")
     
-    print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
-          f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
+    # print(f"{'覆蓋率':<20} | {greedy_coverage:>14.1%} | {best_solution.coverage_rate:>14.1%} | "
+    #       f"{(best_solution.coverage_rate - greedy_coverage)*100:>14.1f}%")
     
-    print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
-          f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
+    # print(f"{'MCS 路徑數':<20} | {greedy_mcs_routes:>15} | {len(best_solution.mcs_routes):>15} | "
+    #       f"{len(best_solution.mcs_routes) - greedy_mcs_routes:>15}")
     
-    print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
-          f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
+    # print(f"{'UAV 路徑數':<20} | {greedy_uav_routes:>15} | {len(best_solution.uav_routes):>15} | "
+    #       f"{len(best_solution.uav_routes) - greedy_uav_routes:>15}")
     
-    print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
-          f"{len(best_solution.unassigned_nodes):>15} | "
-          f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
+    # print(f"{'未服務節點數':<20} | {len(greedy_solution.unassigned_nodes):>15} | "
+    #       f"{len(best_solution.unassigned_nodes):>15} | "
+    #       f"{len(greedy_solution.unassigned_nodes) - len(best_solution.unassigned_nodes):>15}")
     
-    print("-" * 72)
-    print(f"\n圖片已儲存:")
-    print(f"  - 節點分布圖: node_distribution.png")
-    print(f"  - Greedy 路徑: routes_greedy.png")
-    print(f"  - ALNS 路徑: routes_alns.png")
+    # print("-" * 72)
+    # print(f"\n圖片已儲存:")
+    # print(f"  - 節點分布圖: node_distribution.png")
+    # print(f"  - Greedy 路徑: routes_greedy.png")
+    # print(f"  - ALNS 路徑: routes_alns.png")
 
 
 if __name__ == "__main__":
