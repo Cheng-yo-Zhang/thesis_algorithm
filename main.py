@@ -1536,6 +1536,8 @@ class ChargingSchedulingProblem:
         """
         嘗試在路徑的指定位置插入節點
         
+        插入準則：最小化用戶等待時間（與目標函數一致）
+        
         Args:
             route: 目標路徑
             node: 要插入的節點
@@ -1553,15 +1555,16 @@ class ChargingSchedulingProblem:
                 route.remove_node(position)
                 return False
         
-        # 嘗試所有可能的插入位置，找到可行的位置
+        # 嘗試所有可能的插入位置，找到用戶等待時間最小的位置
         best_position = None
-        best_cost = float('inf')
+        best_waiting_time = float('inf')
         
         for pos in range(len(route.nodes) + 1):
             route.insert_node(pos, node)
             if self.evaluate_route(route):
-                if route.total_distance < best_cost:
-                    best_cost = route.total_distance
+                # 以用戶等待時間為主要準則，距離作為 tie-breaker
+                if route.total_user_waiting_time < best_waiting_time:
+                    best_waiting_time = route.total_user_waiting_time
                     best_position = pos
             route.remove_node(pos)
         
@@ -1574,11 +1577,14 @@ class ChargingSchedulingProblem:
     
     def greedy_construction(self) -> Solution:
         """
-        Greedy Construction Heuristic - Earliest Due Date First
+        Greedy Construction Heuristic - Earliest Due Date First + Minimum Waiting Time Insertion
         
+        目標：最小化用戶等待時間
+        
+        策略：
         1. 將所有客戶依據 Due Date 由早到晚排序
-        2. 依序嘗試將客戶插入現有的車輛路徑中
-        3. Feasibility Check: 時間窗, 載重, 電量
+        2. 對每個客戶，遍歷所有候選路徑的所有可行插入位置
+        3. 選擇「等待時間增加最少」的 (路徑, 位置) 組合
         4. 如果現有車輛都塞不進去，就開啟一輛新車
         5. hard_to_access 節點強制只能由 UAV 服務
         
@@ -1593,7 +1599,7 @@ class ChargingSchedulingProblem:
         # 按 Due Date 由早到晚排序
         customers.sort(key=lambda n: n.due_date)
         
-        print("\n開始 Greedy Construction (EDD First)...")
+        print("\n開始 Greedy Construction (EDD First + Min Waiting Time)...")
         print(f"待分配客戶數: {len(customers)}")
         
         for customer in customers:
@@ -1603,21 +1609,44 @@ class ChargingSchedulingProblem:
             if customer.node_type == 'hard_to_access':
                 # Hard-to-Access 只能由 UAV 服務
                 candidate_routes = solution.uav_routes
-                vehicle_type = 'uav'
+                default_vehicle_type = 'uav'
             else:
-                # 其他節點優先嘗試 MCS，再嘗試 UAV
+                # 其他節點可嘗試 MCS 和 UAV
                 candidate_routes = solution.mcs_routes + solution.uav_routes
-                vehicle_type = 'mcs'  # 預設開新車時使用 MCS
+                default_vehicle_type = 'mcs'  # 預設開新車時使用 MCS
             
-            # 嘗試插入現有路徑
+            # ===== 核心改動：比較所有路徑，選擇等待時間增加最少的 =====
+            best_route = None
+            best_position = None
+            best_waiting_increase = float('inf')
+            
             for route in candidate_routes:
                 # 如果是 hard_to_access，跳過 MCS 路徑
                 if customer.node_type == 'hard_to_access' and route.vehicle_type == 'mcs':
                     continue
                 
-                if self.try_insert_node(route, customer):
-                    inserted = True
-                    break
+                # 記錄插入前的等待時間
+                original_waiting = route.total_user_waiting_time
+                
+                # 嘗試所有可能的插入位置
+                for pos in range(len(route.nodes) + 1):
+                    route.insert_node(pos, customer)
+                    if self.evaluate_route(route):
+                        waiting_increase = route.total_user_waiting_time - original_waiting
+                        if waiting_increase < best_waiting_increase:
+                            best_waiting_increase = waiting_increase
+                            best_route = route
+                            best_position = pos
+                    route.remove_node(pos)
+                
+                # 還原路徑狀態
+                self.evaluate_route(route)
+            
+            # 如果找到可行插入點
+            if best_route is not None:
+                best_route.insert_node(best_position, customer)
+                self.evaluate_route(best_route)
+                inserted = True
             
             # 如果無法插入現有路徑，開啟新車
             if not inserted:
