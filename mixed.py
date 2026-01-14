@@ -270,6 +270,9 @@ class SolomonInstanceMixer:
             
             if cust_id in hard_ids:
                 result.loc[idx, "NODE_TYPE"] = NodeType.HARD_TO_ACCESS.value
+                r101_row = df_r101[df_r101["CUST NO."] == cust_id].iloc[0]
+                result.loc[idx, "READY TIME"] = r101_row["READY TIME"]
+                result.loc[idx, "DUE DATE"] = r101_row["DUE DATE"]
                 # Hard-to-Access: 保持 R201 時間窗 (寬鬆，UAV 有彈性)
                 # 但可考慮調整，例如加寬時間窗
                 
@@ -366,7 +369,7 @@ def create_mixed_instance(
     output_path: str = "mixed_instance.csv",
     urgent_ratio: float = 0.2,
     hard_to_access_ratio: float = 0.1,
-    hard_to_access_method: str = 'distance',
+    hard_to_access_method: str = 'peripheral',
     hard_to_access_ids: list[int] | None = None,
     random_seed: int = 42
 ) -> pd.DataFrame:

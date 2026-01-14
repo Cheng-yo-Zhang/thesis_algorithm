@@ -765,10 +765,12 @@ class ALNSSolver:
             best_cost_increase = float('inf')
             
             # 決定可用的路徑
+            # hard_to_access 只能 UAV，urgent 和 normal 只能 MCS
             if node.node_type == 'hard_to_access':
                 candidate_routes = solution.uav_routes
             else:
-                candidate_routes = solution.mcs_routes + solution.uav_routes
+                # urgent 和 normal 只能由 MCS 服務
+                candidate_routes = solution.mcs_routes
             
             # 嘗試插入每條現有路徑的每個位置
             for route in candidate_routes:
@@ -822,10 +824,12 @@ class ALNSSolver:
             
             for node in nodes_to_insert:
                 # 決定可用的路徑
+                # hard_to_access 只能 UAV，urgent 和 normal 只能 MCS
                 if node.node_type == 'hard_to_access':
                     candidate_routes = solution.uav_routes
                 else:
-                    candidate_routes = solution.mcs_routes + solution.uav_routes
+                    # urgent 和 normal 只能由 MCS 服務
+                    candidate_routes = solution.mcs_routes
                 
                 # 收集所有可行插入位置及其成本
                 insertion_options = []  # (cost_increase, route, position)
@@ -909,17 +913,11 @@ class ALNSSolver:
                 return True
             return False
         else:
-            # 優先 MCS，再試 UAV
+            # urgent 和 normal 只能由 MCS 服務
             new_route = Route(vehicle_type='mcs')
             new_route.add_node(node)
             if self.problem.evaluate_route(new_route):
                 solution.add_mcs_route(new_route)
-                return True
-            
-            new_route = Route(vehicle_type='uav')
-            new_route.add_node(node)
-            if self.problem.evaluate_route(new_route):
-                solution.add_uav_route(new_route)
                 return True
             
             return False
@@ -1611,9 +1609,9 @@ class ChargingSchedulingProblem:
                 candidate_routes = solution.uav_routes
                 default_vehicle_type = 'uav'
             else:
-                # 其他節點可嘗試 MCS 和 UAV
-                candidate_routes = solution.mcs_routes + solution.uav_routes
-                default_vehicle_type = 'mcs'  # 預設開新車時使用 MCS
+                # urgent 和 normal 只能由 MCS 服務
+                candidate_routes = solution.mcs_routes
+                default_vehicle_type = 'mcs'
             
             # ===== 核心改動：比較所有路徑，選擇等待時間增加最少的 =====
             best_route = None
@@ -1661,21 +1659,14 @@ class ChargingSchedulingProblem:
                         # 無法服務此節點
                         solution.unassigned_nodes.append(customer)
                 else:
-                    # 先嘗試開啟新 MCS
+                    # urgent 和 normal 只能由 MCS 服務
                     new_route = Route(vehicle_type='mcs')
                     new_route.add_node(customer)
                     if self.evaluate_route(new_route):
                         solution.add_mcs_route(new_route)
                         inserted = True
                     else:
-                        # 嘗試開啟新 UAV
-                        new_route = Route(vehicle_type='uav')
-                        new_route.add_node(customer)
-                        if self.evaluate_route(new_route):
-                            solution.add_uav_route(new_route)
-                            inserted = True
-                        else:
-                            solution.unassigned_nodes.append(customer)
+                        solution.unassigned_nodes.append(customer)
         
         # 計算總成本 (傳入總客戶數以計算覆蓋率)
         solution.calculate_total_cost(total_customers=len(customers))

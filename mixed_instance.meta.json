@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-01-09T15:42:19.157864",
+  "generated_at": "2026-01-14T16:57:50.788999",
   "random_seed": 42,
   "sources": {
     "base_instance": "R201.csv",
     "tight_tw_source": "R101.csv"
   },
   "config": {
-    "urgent_ratio": 0.15,
+    "urgent_ratio": 0.2,
     "hard_to_access_ratio": 0.1,
-    "normal_ratio": 0.75,
+    "normal_ratio": 0.7000000000000001,
     "hard_to_access_method": "distance"
   },
   "node_assignments": {
@@ -17,26 +17,27 @@
       24
     ],
     "urgent_ids": [
-      12,
+      18,
+      11,
+      16,
       3,
-      17,
-      19
+      26
     ]
   },
   "statistics": {
     "total_nodes": 26,
     "by_type": {
-      "normal": 19,
-      "urgent": 4,
+      "normal": 18,
+      "urgent": 5,
       "hard_to_access": 2,
       "depot": 1
     },
     "total_demand": 332,
     "tw_width": {
-      "mean": 98.68,
+      "mean": 79.52,
       "min": 10,
-      "max": 211
+      "max": 175
     }
   },
-  "data_hash": "f90e03b6"
+  "data_hash": "8743aaa0"
 }
