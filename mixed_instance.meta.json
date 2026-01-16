@@ -1,43 +1,64 @@
 {
-  "generated_at": "2026-01-14T16:57:50.788999",
+  "generated_at": "2026-01-16T13:54:12.261015",
   "random_seed": 42,
   "sources": {
     "base_instance": "R201.csv",
     "tight_tw_source": "R101.csv"
   },
   "config": {
+    "n_points": 25,
     "urgent_ratio": 0.2,
-    "hard_to_access_ratio": 0.1,
-    "normal_ratio": 0.7000000000000001,
-    "hard_to_access_method": "distance"
+    "normal_ratio": 0.8
   },
   "node_assignments": {
-    "hard_to_access_ids": [
-      15,
-      24
+    "selected_customer_ids": [
+      59,
+      37,
+      18,
+      101,
+      19,
+      73,
+      53,
+      71,
+      69,
+      13,
+      9,
+      36,
+      47,
+      66,
+      8,
+      91,
+      44,
+      61,
+      81,
+      50,
+      93,
+      86,
+      80,
+      10,
+      49
     ],
     "urgent_ids": [
-      18,
-      11,
-      16,
-      3,
-      26
+      36,
+      69,
+      86,
+      44,
+      19
     ]
   },
   "statistics": {
     "total_nodes": 26,
     "by_type": {
-      "normal": 18,
+      "normal": 20,
       "urgent": 5,
-      "hard_to_access": 2,
       "depot": 1
     },
-    "total_demand": 332,
+    "total_demand": 358,
     "tw_width": {
-      "mean": 79.52,
+      "mean": 101.32,
       "min": 10,
-      "max": 175
+      "max": 180
     }
   },
-  "data_hash": "8743aaa0"
+  "data_hash": "3c9fc137"
 }

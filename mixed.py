@@ -1,18 +1,14 @@
 """
-Solomon VRPTW Instance Mixer for UAV + MCS Cooperative Charging Service
-========================================================================
+Solomon VRPTW Instance Mixer for MCS Charging Service (CLI Version)
+====================================================================
 
 研究場景：
 - 地面 MCS (Mobile Charging Station): 分快充/慢充
   - Urgent: 需要快充 (緊時間窗，從 R101 取)
   - Normal: 適合慢充/過夜 (寬時間窗，從 R201 取)
-- UAV: 快充且機動，適合 Hard-to-Access (地面難到達的節點)
 
-混合邏輯：
-- 以 R201 為 base (整體 instance)
-- Urgent 節點：替換為 R101 的時間窗
-- Hard-to-Access：根據距離/位置特徵判定
-- Normal：保持 R201 原始資料
+CLI 使用說明：
+    python mixed.py --points 25 --seed 42 --urgent-ratio 0.3
 
 Author: Operations Research Team
 """
@@ -21,11 +17,12 @@ from __future__ import annotations
 
 import json
 import hashlib
-from dataclasses import dataclass, field
+import argparse
+import sys
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -40,7 +37,6 @@ class NodeType(str, Enum):
     DEPOT = "depot"
     NORMAL = "normal"                   # 一般節點：慢充/過夜，使用 R201 時間窗
     URGENT = "urgent"                   # 緊急節點：快充，使用 R101 時間窗
-    HARD_TO_ACCESS = "hard_to_access"   # 難達節點：UAV 服務
     
     def __str__(self) -> str:
         return self.value
@@ -51,38 +47,27 @@ class MixerConfig:
     """混合器配置
     
     Attributes:
-        urgent_ratio: Urgent 節點比例 (從 R101 取時間窗)
-        hard_to_access_ratio: Hard-to-Access 節點比例
-        normal_ratio: Normal 節點比例 (自動計算為 1 - urgent - hard_to_access)
-        
-        hard_to_access_method: Hard-to-Access 判定方法
-            - 'distance': 距離 depot 最遠的節點
-            - 'peripheral': 在邊緣區域的節點
-            - 'manual': 手動指定 customer IDs
-        
-        hard_to_access_ids: 若 method='manual'，手動指定的 customer IDs
-        
+        n_points: 選擇的節點數量 (必須是5的倍數，不超過100)
+        urgent_ratio: Urgent 節點比例
+        normal_ratio: Normal 節點比例 (自動計算為 1 - urgent)
         random_seed: 隨機種子 (可重現性)
     """
+    n_points: int = 25
     urgent_ratio: float = 0.2
-    hard_to_access_ratio: float = 0.1
-    
-    hard_to_access_method: Literal['distance', 'peripheral', 'manual'] = 'distance'
-    hard_to_access_ids: list[int] | None = None
-    
     random_seed: int = 42
     
     def __post_init__(self):
-        self.normal_ratio = 1.0 - self.urgent_ratio - self.hard_to_access_ratio
+        # 驗證節點數量
+        if self.n_points % 5 != 0:
+            raise ValueError(f"節點數量必須是5的倍數，目前: {self.n_points}")
+        if self.n_points < 5 or self.n_points > 100:
+            raise ValueError(f"節點數量必須在 5 到 100 之間，目前: {self.n_points}")
         
-        if self.normal_ratio < 0:
-            raise ValueError(
-                f"Ratios exceed 1.0: urgent={self.urgent_ratio}, "
-                f"hard_to_access={self.hard_to_access_ratio}"
-            )
+        # 驗證比例
+        if not 0 <= self.urgent_ratio <= 1:
+            raise ValueError(f"Urgent 比例必須在 0 到 1 之間，目前: {self.urgent_ratio}")
         
-        if self.hard_to_access_method == 'manual' and not self.hard_to_access_ids:
-            raise ValueError("hard_to_access_ids required when method='manual'")
+        self.normal_ratio = 1.0 - self.urgent_ratio
 
 
 # =============================================================================
@@ -95,7 +80,7 @@ class SolomonInstanceMixer:
     以 R201 (寬時間窗) 為 base，對指定節點替換 R101 (緊時間窗) 的屬性。
     
     Example:
-        >>> config = MixerConfig(urgent_ratio=0.3, hard_to_access_ratio=0.2)
+        >>> config = MixerConfig(n_points=25, urgent_ratio=0.3, random_seed=42)
         >>> mixer = SolomonInstanceMixer(config)
         >>> result_df = mixer.mix("R101.csv", "R201.csv", "mixed_output.csv")
     """
@@ -123,88 +108,29 @@ class SolomonInstanceMixer:
         
         return df
     
-    def _calculate_distances_from_depot(self, df: pd.DataFrame) -> pd.Series:
-        """計算每個節點到 depot 的歐式距離"""
-        depot = df.iloc[0]
-        distances = np.sqrt(
-            (df["XCOORD."] - depot["XCOORD."]) ** 2 +
-            (df["YCOORD."] - depot["YCOORD."]) ** 2
-        )
-        return distances
-    
-    def _calculate_peripheral_score(self, df: pd.DataFrame) -> pd.Series:
-        """計算邊緣程度分數 (距離整體中心 + 距離 depot)"""
-        # 所有節點的重心
-        center_x = df["XCOORD."].mean()
-        center_y = df["YCOORD."].mean()
-        
-        dist_to_center = np.sqrt(
-            (df["XCOORD."] - center_x) ** 2 +
-            (df["YCOORD."] - center_y) ** 2
-        )
-        
-        dist_to_depot = self._calculate_distances_from_depot(df)
-        
-        # 綜合分數：邊緣 + 遠離 depot
-        return dist_to_center + dist_to_depot
-    
-    def _select_hard_to_access(
-        self, 
-        df: pd.DataFrame, 
-        count: int,
-        exclude_ids: set[int]
+    def _select_random_customers(
+        self,
+        df: pd.DataFrame,
+        count: int
     ) -> list[int]:
-        """選擇 Hard-to-Access 節點
+        """隨機選擇 customer IDs"""
+        customers = df.iloc[1:]  # 排除 depot
+        available_ids = customers["CUST NO."].tolist()
         
-        Args:
-            df: 資料框
-            count: 要選擇的數量
-            exclude_ids: 已被選為其他類型的 IDs
+        if len(available_ids) < count:
+            raise ValueError(
+                f"需要 {count} 個節點，但只有 {len(available_ids)} 個可用"
+            )
         
-        Returns:
-            被選中的 customer IDs
-        """
-        method = self.config.hard_to_access_method
-        
-        if method == 'manual':
-            # 手動指定
-            return [
-                cid for cid in self.config.hard_to_access_ids 
-                if cid not in exclude_ids
-            ][:count]
-        
-        # 排除 depot (index 0) 和已選的節點
-        customers = df.iloc[1:].copy()
-        customers = customers[~customers["CUST NO."].isin(exclude_ids)]
-        
-        if method == 'distance':
-            # 距離 depot 最遠
-            customers["_score"] = self._calculate_distances_from_depot(customers)
-        else:  # peripheral
-            # 邊緣區域
-            customers["_score"] = self._calculate_peripheral_score(customers)
-        
-        # 選擇分數最高的
-        customers = customers.sort_values("_score", ascending=False)
-        selected = customers.head(count)["CUST NO."].tolist()
-        
+        selected = self.rng.choice(available_ids, size=count, replace=False).tolist()
         return selected
     
     def _select_urgent(
         self,
-        df_r101: pd.DataFrame,
         count: int,
-        exclude_ids: set[int]
+        available_ids: list[int]
     ) -> list[int]:
-        """選擇 Urgent 節點 (隨機抽取)
-        
-        從可用節點中隨機選擇，然後套用 R101 的時間窗
-        """
-        customers = df_r101.iloc[1:].copy()
-        customers = customers[~customers["CUST NO."].isin(exclude_ids)]
-        
-        # 隨機抽取
-        available_ids = customers["CUST NO."].tolist()
+        """從可用節點中隨機選擇 Urgent 節點"""
         if len(available_ids) <= count:
             return available_ids
         
@@ -235,48 +161,38 @@ class SolomonInstanceMixer:
         if not df_r101["CUST NO."].equals(df_r201["CUST NO."]):
             raise ValueError("Customer IDs do not match between R101 and R201")
         
-        # 計算各類型節點數量 (排除 depot)
-        n_customers = len(df_r201) - 1
-        n_hard = int(round(n_customers * self.config.hard_to_access_ratio))
-        n_urgent = int(round(n_customers * self.config.urgent_ratio))
+        # 隨機選擇節點
+        selected_customer_ids = self._select_random_customers(
+            df_r201, self.config.n_points
+        )
         
-        print(f"Total customers: {n_customers}")
-        print(f"Target distribution: Hard={n_hard}, Urgent={n_urgent}, "
-              f"Normal={n_customers - n_hard - n_urgent}")
+        # 計算 Urgent 節點數量
+        n_urgent = int(round(self.config.n_points * self.config.urgent_ratio))
         
-        # 以 R201 為 base
-        result = df_r201.copy()
+        print(f"設定: {self.config.n_points} 點, 隨機種子: {self.config.random_seed}")
+        print(f"目標分佈: Urgent={n_urgent} ({self.config.urgent_ratio:.0%}), "
+              f"Normal={self.config.n_points - n_urgent} ({self.config.normal_ratio:.0%})")
+        
+        # 選擇 Urgent 節點
+        urgent_ids = self._select_urgent(n_urgent, selected_customer_ids)
+        
+        # 建立結果 DataFrame (depot + 選擇的節點)
+        depot_row = df_r201.iloc[[0]].copy()
+        selected_rows = df_r201[df_r201["CUST NO."].isin(selected_customer_ids)].copy()
+        result = pd.concat([depot_row, selected_rows], ignore_index=True)
         
         # 初始化 NODE_TYPE 欄位
         result["NODE_TYPE"] = NodeType.NORMAL.value
         result.loc[0, "NODE_TYPE"] = NodeType.DEPOT.value
         
-        selected_ids: set[int] = set()
-        
-        # Step 1: 選擇 Hard-to-Access (基於距離/位置)
-        hard_ids = self._select_hard_to_access(df_r201, n_hard, selected_ids)
-        selected_ids.update(hard_ids)
-        
-        # Step 2: 選擇 Urgent (基於 R101 時間窗特徵)
-        urgent_ids = self._select_urgent(df_r101, n_urgent, selected_ids)
-        selected_ids.update(urgent_ids)
-        
-        # Step 3: 設定節點類型並替換時間窗
+        # 設定節點類型並替換時間窗
         for idx, row in result.iterrows():
             cust_id = row["CUST NO."]
             
-            if cust_id == 1:  # Depot (CUST NO. = 1 in Solomon format)
+            if idx == 0:  # Depot
                 continue
             
-            if cust_id in hard_ids:
-                result.loc[idx, "NODE_TYPE"] = NodeType.HARD_TO_ACCESS.value
-                r101_row = df_r101[df_r101["CUST NO."] == cust_id].iloc[0]
-                result.loc[idx, "READY TIME"] = r101_row["READY TIME"]
-                result.loc[idx, "DUE DATE"] = r101_row["DUE DATE"]
-                # Hard-to-Access: 保持 R201 時間窗 (寬鬆，UAV 有彈性)
-                # 但可考慮調整，例如加寬時間窗
-                
-            elif cust_id in urgent_ids:
+            if cust_id in urgent_ids:
                 result.loc[idx, "NODE_TYPE"] = NodeType.URGENT.value
                 # Urgent: 使用 R101 的緊時間窗
                 r101_row = df_r101[df_r101["CUST NO."] == cust_id].iloc[0]
@@ -285,24 +201,29 @@ class SolomonInstanceMixer:
             
             # Normal: 保持 R201 原始資料 (已是預設)
         
+        # 重新編號 CUST NO. (1, 2, 3, ...)
+        result["ORIGINAL_CUST_NO"] = result["CUST NO."].copy()
+        result["CUST NO."] = range(1, len(result) + 1)
+        
         # 統計結果
         type_counts = result["NODE_TYPE"].value_counts()
-        print(f"\nActual distribution:")
+        print(f"\n實際分佈:")
         for nt in NodeType:
             count = type_counts.get(nt.value, 0)
-            print(f"  {nt.value}: {count}")
+            if count > 0:
+                print(f"  {nt.value}: {count}")
         
         # 儲存
         if output_path:
             output_path = Path(output_path)
             result.to_csv(output_path, index=False)
-            print(f"\nSaved to: {output_path}")
+            print(f"\n已儲存至: {output_path}")
             
             # 儲存 metadata
             self._save_metadata(
                 output_path, 
                 r101_path, r201_path,
-                hard_ids, urgent_ids, result
+                urgent_ids, selected_customer_ids, result
             )
         
         return result
@@ -312,8 +233,8 @@ class SolomonInstanceMixer:
         output_path: Path,
         r101_path: str | Path,
         r201_path: str | Path,
-        hard_ids: list[int],
         urgent_ids: list[int],
+        selected_ids: list[int],
         result: pd.DataFrame
     ):
         """儲存 metadata JSON"""
@@ -329,13 +250,12 @@ class SolomonInstanceMixer:
                 "tight_tw_source": str(r101_path)
             },
             "config": {
+                "n_points": self.config.n_points,
                 "urgent_ratio": self.config.urgent_ratio,
-                "hard_to_access_ratio": self.config.hard_to_access_ratio,
-                "normal_ratio": self.config.normal_ratio,
-                "hard_to_access_method": self.config.hard_to_access_method
+                "normal_ratio": self.config.normal_ratio
             },
             "node_assignments": {
-                "hard_to_access_ids": hard_ids,
+                "selected_customer_ids": selected_ids,
                 "urgent_ids": urgent_ids
             },
             "statistics": {
@@ -356,7 +276,7 @@ class SolomonInstanceMixer:
         meta_path = output_path.with_suffix(".meta.json")
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-        print(f"Metadata saved to: {meta_path}")
+        print(f"Metadata 已儲存至: {meta_path}")
 
 
 # =============================================================================
@@ -367,10 +287,8 @@ def create_mixed_instance(
     r101_path: str = "R101.csv",
     r201_path: str = "R201.csv",
     output_path: str = "mixed_instance.csv",
+    n_points: int = 25,
     urgent_ratio: float = 0.2,
-    hard_to_access_ratio: float = 0.1,
-    hard_to_access_method: str = 'peripheral',
-    hard_to_access_ids: list[int] | None = None,
     random_seed: int = 42
 ) -> pd.DataFrame:
     """便利函數：快速產生混合 instance
@@ -379,10 +297,8 @@ def create_mixed_instance(
         r101_path: R101 檔案 (緊時間窗)
         r201_path: R201 檔案 (base, 寬時間窗)
         output_path: 輸出檔案路徑
-        urgent_ratio: Urgent 節點比例 (default: 0.3)
-        hard_to_access_ratio: Hard-to-Access 節點比例 (default: 0.2)
-        hard_to_access_method: 'distance' | 'peripheral' | 'manual'
-        hard_to_access_ids: 若 method='manual'，指定的 customer IDs
+        n_points: 節點數量 (必須是5的倍數，不超過100)
+        urgent_ratio: Urgent 節點比例
         random_seed: 隨機種子
     
     Returns:
@@ -390,16 +306,14 @@ def create_mixed_instance(
     
     Example:
         >>> df = create_mixed_instance(
+        ...     n_points=25,
         ...     urgent_ratio=0.3,
-        ...     hard_to_access_ratio=0.2,
-        ...     hard_to_access_method='distance'
+        ...     random_seed=42
         ... )
     """
     config = MixerConfig(
+        n_points=n_points,
         urgent_ratio=urgent_ratio,
-        hard_to_access_ratio=hard_to_access_ratio,
-        hard_to_access_method=hard_to_access_method,
-        hard_to_access_ids=hard_to_access_ids,
         random_seed=random_seed
     )
     
@@ -444,75 +358,133 @@ def analyze_instance(filepath: str | Path) -> dict:
 # CLI
 # =============================================================================
 
+def validate_points(value: str) -> int:
+    """驗證節點數量參數"""
+    try:
+        ivalue = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' 不是有效的整數")
+    
+    if ivalue % 5 != 0:
+        raise argparse.ArgumentTypeError(
+            f"節點數量必須是5的倍數 (例如: 5, 10, 15, ..., 100)，目前: {ivalue}"
+        )
+    if ivalue < 5 or ivalue > 100:
+        raise argparse.ArgumentTypeError(
+            f"節點數量必須在 5 到 100 之間，目前: {ivalue}"
+        )
+    return ivalue
+
+
+def validate_ratio(value: str) -> float:
+    """驗證比例參數"""
+    try:
+        fvalue = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"'{value}' 不是有效的數字")
+    
+    if not 0 <= fvalue <= 1:
+        raise argparse.ArgumentTypeError(
+            f"比例必須在 0 到 1 之間，目前: {fvalue}"
+        )
+    return fvalue
+
+
 def main():
     """Command-line interface"""
-    import argparse
-    
     parser = argparse.ArgumentParser(
-        description="Mix Solomon VRPTW instances for UAV+MCS charging service"
+        description="Mixed Solomon VRPTW Instance Generator for MCS Charging Service",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+範例:
+  # 產生 25 個節點，urgent 佔 30%，隨機種子 42
+  python mixed.py --points 25 --urgent-ratio 0.3 --seed 42
+
+  # 產生 50 個節點，urgent 佔 20%，隨機種子 123
+  python mixed.py --points 50 --urgent-ratio 0.2 --seed 123
+
+  # 分析來源檔案後再混合
+  python mixed.py --points 30 --urgent-ratio 0.4 --seed 42 --analyze
+        """
+    )
+    
+    parser.add_argument(
+        "--points", "-p", "--n_points", "-n",
+        type=validate_points,
+        required=True,
+        help="節點數量 (必須是5的倍數，範圍: 5-100)"
     )
     parser.add_argument(
-        "--r101", default="R101.csv",
-        help="R101 file path (tight TW source)"
+        "--urgent-ratio", "-u",
+        type=validate_ratio,
+        required=True,
+        help="Urgent 節點比例 (0-1 之間，例如: 0.3 表示 30%%)"
     )
     parser.add_argument(
-        "--r201", default="R201.csv", 
-        help="R201 file path (base instance)"
+        "--seed", "-s",
+        type=int,
+        required=True,
+        help="隨機種子 (用於可重現性)"
     )
     parser.add_argument(
-        "-o", "--output", default="mixed_instance.csv",
-        help="Output file path"
+        "--r101",
+        default="R101.csv",
+        help="R101 檔案路徑 (緊時間窗來源，預設: R101.csv)"
     )
     parser.add_argument(
-        "--urgent-ratio", type=float, default=0.2,
-        help="Ratio of urgent nodes (default: 0.2)"
+        "--r201",
+        default="R201.csv", 
+        help="R201 檔案路徑 (base instance，預設: R201.csv)"
     )
     parser.add_argument(
-        "--hard-ratio", type=float, default=0.1,
-        help="Ratio of hard-to-access nodes (default: 0.1)"
+        "-o", "--output",
+        default="mixed_instance.csv",
+        help="輸出檔案路徑 (預設: mixed_instance.csv)"
     )
     parser.add_argument(
-        "--hard-method", choices=['distance', 'peripheral', 'manual'],
-        default='distance',
-        help="Method for selecting hard-to-access nodes"
-    )
-    parser.add_argument(
-        "--seed", type=int, default=42,
-        help="Random seed"
-    )
-    parser.add_argument(
-        "--analyze", action="store_true",
-        help="Analyze source instances before mixing"
+        "--analyze",
+        action="store_true",
+        help="混合前分析來源 instance"
     )
     
     args = parser.parse_args()
     
+    print("=" * 60)
+    print("Solomon VRPTW Instance Mixer (Urgent + Normal)")
+    print("=" * 60)
+    
     if args.analyze:
-        print("=" * 60)
-        print("Source Instance Analysis")
-        print("=" * 60)
+        print("\n--- 來源 Instance 分析 ---\n")
         for path in [args.r101, args.r201]:
-            stats = analyze_instance(path)
-            print(f"\n{stats['file']}:")
-            print(f"  Customers: {stats['n_customers']}")
-            print(f"  Horizon: {stats['planning_horizon']}")
-            print(f"  TW width: {stats['time_window']['mean_width']:.1f} "
-                  f"[{stats['time_window']['min_width']}, {stats['time_window']['max_width']}]")
-            print(f"  Avg distance from depot: {stats['distance_from_depot']['mean']:.2f}")
+            try:
+                stats = analyze_instance(path)
+                print(f"{stats['file']}:")
+                print(f"  Customers: {stats['n_customers']}")
+                print(f"  Horizon: {stats['planning_horizon']}")
+                print(f"  TW width: {stats['time_window']['mean_width']:.1f} "
+                      f"[{stats['time_window']['min_width']}, {stats['time_window']['max_width']}]")
+                print(f"  Avg distance from depot: {stats['distance_from_depot']['mean']:.2f}")
+                print()
+            except FileNotFoundError:
+                print(f"  檔案不存在: {path}")
     
-    print("\n" + "=" * 60)
-    print("Creating Mixed Instance")
-    print("=" * 60 + "\n")
+    print("\n--- 產生混合 Instance ---\n")
     
-    create_mixed_instance(
-        r101_path=args.r101,
-        r201_path=args.r201,
-        output_path=args.output,
-        urgent_ratio=args.urgent_ratio,
-        hard_to_access_ratio=args.hard_ratio,
-        hard_to_access_method=args.hard_method,
-        random_seed=args.seed
-    )
+    try:
+        create_mixed_instance(
+            r101_path=args.r101,
+            r201_path=args.r201,
+            output_path=args.output,
+            n_points=args.points,
+            urgent_ratio=args.urgent_ratio,
+            random_seed=args.seed
+        )
+        print("\n" + "=" * 60)
+        print("完成！")
+        print("=" * 60)
+    except Exception as e:
+        print(f"\n錯誤: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

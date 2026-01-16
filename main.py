@@ -25,7 +25,7 @@ class UAVConfig:
     SPEED: float = 60.0 / 60.0          # km/min (60 km/h)
     CAPACITY: float = 1000000.0         # kWh 電池容量
     POWER_FAST: float = 50.0            # kW 快充功率
-    MAX_PAYLOAD: float = 50.0           # kWh 最大載電量 (需足以服務 hard_to_access 節點)
+    MAX_PAYLOAD: float = 50.0           # kWh 最大載電量
 
 
 @dataclass
@@ -71,7 +71,7 @@ class Node:
     ready_time: float
     due_date: float
     service_time: float
-    node_type: str = 'normal'  # 'depot', 'normal', 'hard_to_access', 'urgent'
+    node_type: str = 'normal'  # 'depot', 'normal', 'urgent'
 
 
 # ==================== 路徑容器類別 ====================
@@ -174,6 +174,8 @@ class Solution:
         self.total_time: float = 0.0
         self.total_waiting_time: float = 0.0
         self.avg_waiting_time: float = 0.0
+        self.waiting_customers_count: int = 0  # 有等待的客戶數
+        self.avg_waiting_time_with_wait: float = 0.0  # 只計有等待客戶的平均等待時間
         self.coverage_rate: float = 0.0
         self.flexibility_score: float = 0.0
         self.unassigned_nodes: List[Node] = []
@@ -236,6 +238,17 @@ class Solution:
         for r in all_routes:
             served_count += sum(1 for node in r.nodes if node.id != 0)
         self.avg_waiting_time = self.total_waiting_time / served_count if served_count > 0 else 0.0
+        
+        # 計算有等待的客戶數和只計有等待客戶的平均等待時間
+        self.waiting_customers_count = 0
+        for r in all_routes:
+            for wt in r.user_waiting_times:
+                if wt > 0:
+                    self.waiting_customers_count += 1
+        self.avg_waiting_time_with_wait = (
+            self.total_waiting_time / self.waiting_customers_count 
+            if self.waiting_customers_count > 0 else 0.0
+        )
         
         # 3. 計算覆蓋率
         if total_customers is not None:
@@ -300,6 +313,8 @@ class Solution:
         new_solution.total_time = self.total_time
         new_solution.total_waiting_time = self.total_waiting_time
         new_solution.avg_waiting_time = self.avg_waiting_time
+        new_solution.waiting_customers_count = self.waiting_customers_count
+        new_solution.avg_waiting_time_with_wait = self.avg_waiting_time_with_wait
         new_solution.coverage_rate = self.coverage_rate
         new_solution.flexibility_score = self.flexibility_score
         new_solution.total_customers = self.total_customers
@@ -335,7 +350,8 @@ class Solution:
         
         # 關鍵指標
         print("\n" + "關鍵指標")
-        print(f"平均用戶等待時間: {self.avg_waiting_time:.2f} 分鐘")
+        print(f"平均用戶等待時間 (全部客戶): {self.avg_waiting_time:.2f} 分鐘")
+        # print(f"平均用戶等待時間 (有等待客戶): {self.avg_waiting_time_with_wait:.2f} 分鐘 ({self.waiting_customers_count}/{self.total_customers - len(self.unassigned_nodes)} 客戶有等待)")
         print(f"覆蓋率: {self.coverage_rate:.1%} ({self.total_customers - len(self.unassigned_nodes)}/{self.total_customers})")
         print(f"可行解: {'是' if self.is_feasible else '否 (有未服務節點)'}")
         
@@ -447,7 +463,6 @@ class ALNSSolver:
     - 使用 Simulated Annealing 作為接受準則
     - 支援 3 種 destroy operators + 2 種 repair operators
     - Adaptive weight 每 segment 更新一次
-    - 完全遵守 hard_to_access -> UAV only 的限制
     """
     
     def __init__(self, 
@@ -765,12 +780,8 @@ class ALNSSolver:
             best_cost_increase = float('inf')
             
             # 決定可用的路徑
-            # hard_to_access 只能 UAV，urgent 和 normal 只能 MCS
-            if node.node_type == 'hard_to_access':
-                candidate_routes = solution.uav_routes
-            else:
-                # urgent 和 normal 只能由 MCS 服務
-                candidate_routes = solution.mcs_routes
+            # urgent 和 normal 只能由 MCS 服務
+            candidate_routes = solution.mcs_routes
             
             # 嘗試插入每條現有路徑的每個位置
             for route in candidate_routes:
@@ -824,12 +835,8 @@ class ALNSSolver:
             
             for node in nodes_to_insert:
                 # 決定可用的路徑
-                # hard_to_access 只能 UAV，urgent 和 normal 只能 MCS
-                if node.node_type == 'hard_to_access':
-                    candidate_routes = solution.uav_routes
-                else:
-                    # urgent 和 normal 只能由 MCS 服務
-                    candidate_routes = solution.mcs_routes
+                # urgent 和 normal 只能由 MCS 服務
+                candidate_routes = solution.mcs_routes
                 
                 # 收集所有可行插入位置及其成本
                 insertion_options = []  # (cost_increase, route, position)
@@ -904,23 +911,21 @@ class ALNSSolver:
         Returns:
             是否成功建立
         """
-        if node.node_type == 'hard_to_access':
-            # 只能開 UAV
-            new_route = Route(vehicle_type='uav')
-            new_route.add_node(node)
-            if self.problem.evaluate_route(new_route):
-                solution.add_uav_route(new_route)
-                return True
-            return False
-        else:
-            # urgent 和 normal 只能由 MCS 服務
-            new_route = Route(vehicle_type='mcs')
-            new_route.add_node(node)
-            if self.problem.evaluate_route(new_route):
-                solution.add_mcs_route(new_route)
-                return True
-            
-            return False
+        # 優先嘗試 MCS
+        new_route = Route(vehicle_type='mcs')
+        new_route.add_node(node)
+        if self.problem.evaluate_route(new_route):
+            solution.add_mcs_route(new_route)
+            return True
+        
+        # MCS 無法服務，嘗試派遣 UAV
+        uav_route = Route(vehicle_type='uav')
+        uav_route.add_node(node)
+        if self.problem.evaluate_route(uav_route):
+            solution.add_uav_route(uav_route)
+            return True
+        
+        return False
     
     def _estimate_new_route_cost(self, node: Node) -> Optional[float]:
         """
@@ -929,10 +934,7 @@ class ALNSSolver:
         Returns:
             成本估計值，或 None 表示不可行
         """
-        if node.node_type == 'hard_to_access':
-            vehicle = 'uav'
-        else:
-            vehicle = 'mcs'
+        vehicle = 'mcs'
         
         # 估計成本 = depot -> node -> depot 的距離
         depot = self.problem.depot
@@ -1181,8 +1183,6 @@ def plot_routes(solution: Solution, problem: 'ChargingSchedulingProblem',
             plt.scatter(node.x, node.y, c='green', marker='*', s=300, zorder=5, edgecolors='black')
             plt.annotate('Depot', (node.x, node.y), textcoords="offset points", 
                         xytext=(10, 10), fontsize=10, fontweight='bold')
-        elif node.node_type == 'hard_to_access':
-            plt.scatter(node.x, node.y, c='red', marker='^', s=100, zorder=4, edgecolors='black')
         elif node.node_type == 'urgent':
             plt.scatter(node.x, node.y, c='orange', marker='s', s=100, zorder=4, edgecolors='black')
     
@@ -1217,7 +1217,6 @@ class ChargingSchedulingProblem:
         
         self.nodes: List[Node] = []
         self.depot: Node = None
-        self.hard_to_access_indices: Set[int] = set()
         self.urgent_indices: Set[int] = set()
         
         # 設定隨機種子
@@ -1280,9 +1279,6 @@ class ChargingSchedulingProblem:
         
         if use_csv_types:
             # 根據已讀取的 node_type 建立索引集合
-            self.hard_to_access_indices = set(
-                i for i in customer_indices if self.nodes[i].node_type == 'hard_to_access'
-            )
             self.urgent_indices = set(
                 i for i in customer_indices if self.nodes[i].node_type == 'urgent'
             )
@@ -1291,15 +1287,8 @@ class ChargingSchedulingProblem:
             ]
         else:
             # 舊行為：隨機分配節點類型
-            num_hard = int(num_customers * self.config.HARD_TO_ACCESS_RATIO)
-            self.hard_to_access_indices = set(random.sample(customer_indices, num_hard))
-            
-            for idx in self.hard_to_access_indices:
-                self.nodes[idx].node_type = 'hard_to_access'
-            
-            remaining = [i for i in customer_indices if i not in self.hard_to_access_indices]
             num_urgent = int(num_customers * self.config.URGENT_RATIO)
-            self.urgent_indices = set(random.sample(remaining, num_urgent))
+            self.urgent_indices = set(random.sample(customer_indices, num_urgent))
             
             for idx in self.urgent_indices:
                 self.nodes[idx].node_type = 'urgent'
@@ -1308,13 +1297,12 @@ class ChargingSchedulingProblem:
             
             normal_indices = [
                 i for i in customer_indices 
-                if i not in self.hard_to_access_indices and i not in self.urgent_indices
+                if i not in self.urgent_indices
             ]
             for idx in normal_indices:
                 new_due = self.nodes[idx].ready_time + self.config.TW_NORMAL
                 self.nodes[idx].due_date = min(new_due, self.depot.due_date)
         
-        print(f"Hard-to-Access 節點: {len(self.hard_to_access_indices)} 個")
         print(f"Urgent 節點: {len(self.urgent_indices)} 個")
         print(f"Normal 節點: {len(normal_indices)} 個")
     
@@ -1427,9 +1415,7 @@ class ChargingSchedulingProblem:
                 return False
             
             # ===== 等待時間計算 =====
-            # 用戶等待時間: 用戶在 READY_TIME 發出請求，等待 MCS 到達
-            # 若 MCS 在 READY_TIME 之後到達，用戶需要等待
-            user_waiting_time = max(0.0, arrival_time - node.ready_time)
+            # user_waiting_time 將在計算 departure_time 後再計算
             
             # MCS 等待時間: MCS 到達後，等待用戶準備好 (READY_TIME)
             # 若 MCS 在 READY_TIME 之前到達，MCS 需要等待
@@ -1449,7 +1435,7 @@ class ChargingSchedulingProblem:
                     charging_power = self.mcs.POWER_FAST
                     charging_mode = 'FAST'
                 else:
-                    # Normal/Hard-to-Access 節點: 優先嘗試慢充
+                    # Normal 節點: 優先嘗試慢充
                     # 計算慢充所需時間
                     slow_service_time = self.calculate_charging_time(node.demand, self.mcs.POWER_SLOW)
                     slow_departure_time = service_start + slow_service_time
@@ -1476,17 +1462,29 @@ class ChargingSchedulingProblem:
                         if return_time > self.depot.due_date:
                             slow_feasible = False
                     
-                    # 決定充電模式
+                    # 決定充電模式: Normal 強制使用 Slow Charging
+                    # 若 Slow 不可行，則此路徑無法服務該節點
                     if slow_feasible:
                         charging_power = self.mcs.POWER_SLOW
                         charging_mode = 'SLOW'
                     else:
-                        charging_power = self.mcs.POWER_FAST
-                        charging_mode = 'FAST'
+                        # Normal 節點強制 Slow，無法 fallback 到 Fast
+                        route.is_feasible = False
+                        return False
             
             # 計算實際服務時間
             service_time = self.calculate_charging_time(node.demand, charging_power)
             departure_time = service_start + service_time
+            
+            # ===== 檢查充電是否在 due_date 內完成 =====
+            # 所有節點類型都必須在 due_date 前完成充電
+            if departure_time > node.due_date:
+                route.is_feasible = False
+                return False
+            
+            # ===== 計算用戶等待時間 (含充電時間) =====
+            # user_waiting_time = 用戶從發出請求到充電完成的總時間
+            user_waiting_time = departure_time - node.ready_time
             
             route.arrival_times.append(arrival_time)
             route.departure_times.append(departure_time)
@@ -1584,7 +1582,6 @@ class ChargingSchedulingProblem:
         2. 對每個客戶，遍歷所有候選路徑的所有可行插入位置
         3. 選擇「等待時間增加最少」的 (路徑, 位置) 組合
         4. 如果現有車輛都塞不進去，就開啟一輛新車
-        5. hard_to_access 節點強制只能由 UAV 服務
         
         Returns:
             建構出的初始解
@@ -1603,15 +1600,8 @@ class ChargingSchedulingProblem:
         for customer in customers:
             inserted = False
             
-            # 決定可用的車輛類型
-            if customer.node_type == 'hard_to_access':
-                # Hard-to-Access 只能由 UAV 服務
-                candidate_routes = solution.uav_routes
-                default_vehicle_type = 'uav'
-            else:
-                # urgent 和 normal 只能由 MCS 服務
-                candidate_routes = solution.mcs_routes
-                default_vehicle_type = 'mcs'
+            # urgent 和 normal 只能由 MCS 服務
+            candidate_routes = solution.mcs_routes
             
             # ===== 核心改動：比較所有路徑，選擇等待時間增加最少的 =====
             best_route = None
@@ -1619,9 +1609,6 @@ class ChargingSchedulingProblem:
             best_waiting_increase = float('inf')
             
             for route in candidate_routes:
-                # 如果是 hard_to_access，跳過 MCS 路徑
-                if customer.node_type == 'hard_to_access' and route.vehicle_type == 'mcs':
-                    continue
                 
                 # 記錄插入前的等待時間
                 original_waiting = route.total_user_waiting_time
@@ -1648,22 +1635,18 @@ class ChargingSchedulingProblem:
             
             # 如果無法插入現有路徑，開啟新車
             if not inserted:
-                if customer.node_type == 'hard_to_access':
-                    # 開啟新 UAV
-                    new_route = Route(vehicle_type='uav')
-                    new_route.add_node(customer)
-                    if self.evaluate_route(new_route):
-                        solution.add_uav_route(new_route)
-                        inserted = True
-                    else:
-                        # 無法服務此節點
-                        solution.unassigned_nodes.append(customer)
+                # 優先嘗試 MCS
+                new_route = Route(vehicle_type='mcs')
+                new_route.add_node(customer)
+                if self.evaluate_route(new_route):
+                    solution.add_mcs_route(new_route)
+                    inserted = True
                 else:
-                    # urgent 和 normal 只能由 MCS 服務
-                    new_route = Route(vehicle_type='mcs')
-                    new_route.add_node(customer)
-                    if self.evaluate_route(new_route):
-                        solution.add_mcs_route(new_route)
+                    # MCS 無法服務，嘗試派遣 UAV
+                    uav_route = Route(vehicle_type='uav')
+                    uav_route.add_node(customer)
+                    if self.evaluate_route(uav_route):
+                        solution.add_uav_route(uav_route)
                         inserted = True
                     else:
                         solution.unassigned_nodes.append(customer)
@@ -1687,7 +1670,6 @@ class ChargingSchedulingProblem:
         
         # 分類節點
         normal_nodes = [n for n in self.nodes if n.node_type == 'normal']
-        hard_nodes = [n for n in self.nodes if n.node_type == 'hard_to_access']
         urgent_nodes = [n for n in self.nodes if n.node_type == 'urgent']
         
         # 繪製普通節點 (藍色)
@@ -1695,15 +1677,10 @@ class ChargingSchedulingProblem:
             plt.scatter([n.x for n in normal_nodes], [n.y for n in normal_nodes],
                        c='blue', marker='o', s=50, label='Normal')
         
-        # 繪製 Hard-to-Access 節點 (紅色)
-        if hard_nodes:
-            plt.scatter([n.x for n in hard_nodes], [n.y for n in hard_nodes],
-                       c='red', marker='^', s=80, label='Hard-to-Access (10%)')
-        
         # 繪製 Urgent 節點 (橘色)
         if urgent_nodes:
             plt.scatter([n.x for n in urgent_nodes], [n.y for n in urgent_nodes],
-                       c='orange', marker='s', s=80, label='Urgent (20%)')
+                       c='orange', marker='s', s=80, label='Urgent')
         
         # 繪製 Depot (綠色)
         if self.depot:
@@ -1753,7 +1730,6 @@ def main():
     problem.plot_nodes()
     
     # 輸出節點資訊
-    # print(f"\nHard-to-Access 節點索引: {sorted(problem.hard_to_access_indices)}")
     # print(f"Urgent 節點索引: {sorted(problem.urgent_indices)}")
     
     # ==================== Phase 1: Greedy Construction ====================
