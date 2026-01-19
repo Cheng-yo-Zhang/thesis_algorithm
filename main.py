@@ -791,7 +791,8 @@ class ALNSSolver:
                     test_route.insert_node(pos, node)
                     
                     if self.problem.evaluate_route(test_route):
-                        cost_increase = test_route.total_distance - route.total_distance
+                        # 使用等待時間作為成本（與目標函數一致）
+                        cost_increase = test_route.total_user_waiting_time - route.total_user_waiting_time
                         if cost_increase < best_cost_increase:
                             best_cost_increase = cost_increase
                             best_route = route
@@ -847,7 +848,8 @@ class ALNSSolver:
                         test_route.insert_node(pos, node)
                         
                         if self.problem.evaluate_route(test_route):
-                            cost_increase = test_route.total_distance - route.total_distance
+                            # 使用等待時間作為成本（與目標函數一致）
+                            cost_increase = test_route.total_user_waiting_time - route.total_user_waiting_time
                             insertion_options.append((cost_increase, route, pos))
                 
                 # 檢查是否可以開新路徑
@@ -929,31 +931,41 @@ class ALNSSolver:
     
     def _estimate_new_route_cost(self, node: Node) -> Optional[float]:
         """
-        估計為節點開新路徑的成本
+        估計為節點開新路徑的成本（使用等待時間）
         
         Returns:
-            成本估計值，或 None 表示不可行
+            成本估計值（等待時間），或 None 表示不可行
         """
         vehicle = 'mcs'
         
-        # 估計成本 = depot -> node -> depot 的距離
         depot = self.problem.depot
         dist = (self.dist_matrix.get_distance(depot, node, vehicle) +
                 self.dist_matrix.get_distance(node, depot, vehicle))
         
-        # 簡單檢查時間可行性
+        # 計算行駛時間
         if vehicle == 'mcs':
             speed = self.problem.mcs.SPEED
+            power = self.problem.mcs.POWER_SLOW if node.node_type == 'normal' else self.problem.mcs.POWER_FAST
         else:
             speed = self.problem.uav.SPEED
+            power = self.problem.uav.POWER_FAST
         
-        travel_time = dist / speed
+        travel_time = self.dist_matrix.get_distance(depot, node, vehicle) / speed
         service_start = max(travel_time, node.ready_time)
         
         if service_start > node.due_date:
             return None
         
-        return dist
+        # 計算充電時間
+        charging_time = (node.demand / power) * 60.0
+        departure_time = service_start + charging_time
+        
+        if departure_time > node.due_date:
+            return None
+        
+        # 返回等待時間（與目標函數一致）
+        user_waiting_time = departure_time - node.ready_time
+        return user_waiting_time
     
     # ==================== Adaptive Weight Update ====================
     
@@ -1762,7 +1774,7 @@ def main():
     # # 執行 ALNS (可調整參數)
     # best_solution = alns.solve(
     #     initial_solution=greedy_solution,
-    #     max_iters=1000,       # 迭代次數
+    #     max_iters=5000,       # 迭代次數
     #     time_limit_sec=120    # 時間限制 (秒)
     # )
     
