@@ -91,7 +91,7 @@ class Route:
         self.nodes: List[Node] = []  # 路徑上的節點序列 (不含 depot)
         self.departure_times: List[float] = []  # 各節點的出發時間
         self.arrival_times: List[float] = []  # 各節點的到達時間
-        self.user_waiting_times: List[float] = []  # 各節點的用戶等待時間 (用戶發出請求後等 MCS 到達)
+        self.user_waiting_times: List[float] = []  # 各節點的用戶等待時間 (用戶發出請求後等充電完成 = departure - ready)
         self.mcs_waiting_times: List[float] = []  # 各節點的 MCS 等待時間 (MCS 到達後等用戶準備好)
         self.charging_modes: List[str] = []  # 各節點的充電模式 ('FAST' 或 'SLOW')
         self.total_distance: float = 0.0
@@ -210,10 +210,11 @@ class Solution:
         Objective Function (Hierarchical):
             Cost = α × 未服務節點數 + β × 平均用戶等待時間 + γ × 總距離
         
-        用戶等待時間定義：
+        用戶等待時間定義 (Waiting Until Service Completion):
             - 用戶在 READY_TIME 發出充電請求
-            - 用戶等待時間 = max(0, MCS到達時間 - READY_TIME)
-            - 若 MCS 比 READY_TIME 早到，用戶不需等待 (等待時間=0)
+            - 用戶等待時間 = 服務完成時間 - READY_TIME = departure_time - ready_time
+            - 這包含：(1) 等待 MCS 到達的時間 + (2) 充電服務時間
+            - 即使 MCS 比 READY_TIME 早到，用戶仍需等待充電完成
         
         設計原則：
             - α (10000): 極大懲罰，確保 ALNS 不會「丟棄客戶」來作弊
@@ -232,11 +233,9 @@ class Solution:
         self.total_distance = sum(r.total_distance for r in all_routes)
         self.total_time = sum(r.total_time for r in all_routes)
         
-        # 2. 計算用戶等待時間 (用戶發出請求後等待 MCS 到達的時間)
+        # 2. 計算用戶等待時間 (用戶發出請求後等待充電服務完成的時間 = departure_time - ready_time)
         self.total_waiting_time = sum(r.total_user_waiting_time for r in all_routes)
-        served_count = 0
-        for r in all_routes:
-            served_count += sum(1 for node in r.nodes if node.id != 0)
+        served_count = sum(len(r.nodes) for r in all_routes)
         self.avg_waiting_time = self.total_waiting_time / served_count if served_count > 0 else 0.0
         
         # 計算有等待的客戶數和只計有等待客戶的平均等待時間
@@ -786,15 +785,12 @@ class ALNSSolver:
             # 嘗試插入每條現有路徑的每個位置
             for route in candidate_routes:
                 for pos in range(len(route.nodes) + 1):
-                    # 複製路徑測試
-                    test_route = route.copy()
-                    test_route.insert_node(pos, node)
+                    # 使用增量檢查 (O(1) ~ O(n)) 而非完整評估 (O(n))
+                    feasible, delta_cost = self.problem.incremental_insertion_check(route, pos, node)
                     
-                    if self.problem.evaluate_route(test_route):
-                        # 使用等待時間作為成本（與目標函數一致）
-                        cost_increase = test_route.total_user_waiting_time - route.total_user_waiting_time
-                        if cost_increase < best_cost_increase:
-                            best_cost_increase = cost_increase
+                    if feasible:
+                        if delta_cost < best_cost_increase:
+                            best_cost_increase = delta_cost
                             best_route = route
                             best_position = pos
             
@@ -844,13 +840,11 @@ class ALNSSolver:
                 
                 for route in candidate_routes:
                     for pos in range(len(route.nodes) + 1):
-                        test_route = route.copy()
-                        test_route.insert_node(pos, node)
+                        # 使用增量檢查 (O(1) ~ O(n)) 而非完整評估 (O(n))
+                        feasible, delta_cost = self.problem.incremental_insertion_check(route, pos, node)
                         
-                        if self.problem.evaluate_route(test_route):
-                            # 使用等待時間作為成本（與目標函數一致）
-                            cost_increase = test_route.total_user_waiting_time - route.total_user_waiting_time
-                            insertion_options.append((cost_increase, route, pos))
+                        if feasible:
+                            insertion_options.append((delta_cost, route, pos))
                 
                 # 檢查是否可以開新路徑
                 new_route_cost = self._estimate_new_route_cost(node)
@@ -1583,6 +1577,180 @@ class ChargingSchedulingProblem:
         
         return False
     
+    def incremental_insertion_check(self, route: Route, pos: int, node: Node) -> Tuple[bool, float]:
+        """
+        增量插入可行性檢查與成本計算 (O(1) ~ O(n))
+        
+        比起完整的 evaluate_route()，此方法只計算插入節點後的局部變化，
+        並透過前向傳播檢查時間窗約束。
+        
+        Args:
+            route: 目標路徑 (不會被修改)
+            pos: 插入位置 (0 = 路徑開頭)
+            node: 要插入的節點
+        
+        Returns:
+            (is_feasible, delta_user_waiting_time)
+            若不可行，delta_user_waiting_time = float('inf')
+        """
+        vehicle = route.vehicle_type
+        
+        # ===== 1. 載重檢查 O(1) =====
+        if vehicle == 'mcs':
+            capacity = self.mcs.CAPACITY
+        else:
+            capacity = self.uav.MAX_PAYLOAD
+        
+        if route.total_demand + node.demand > capacity:
+            return False, float('inf')
+        
+        # ===== 2. 計算到達新節點的時間 O(1) =====
+        if pos == 0:
+            # 從 depot 出發
+            prev_departure_time = 0.0
+            prev_node = self.depot
+        else:
+            prev_departure_time = route.departure_times[pos - 1]
+            prev_node = route.nodes[pos - 1]
+        
+        travel_time_to_new = self.calculate_travel_time(prev_node, node, vehicle)
+        arrival_at_new = prev_departure_time + travel_time_to_new
+        
+        # 檢查是否能在 due_date 前到達
+        if arrival_at_new > node.due_date:
+            return False, float('inf')
+        
+        # ===== 3. 決定充電模式並計算服務時間 O(1) =====
+        service_start_new = max(arrival_at_new, node.ready_time)
+        
+        if vehicle == 'uav':
+            charging_power = self.uav.POWER_FAST
+        else:
+            if node.node_type == 'urgent':
+                charging_power = self.mcs.POWER_FAST
+            else:
+                # Normal 節點強制使用 Slow Charging
+                charging_power = self.mcs.POWER_SLOW
+        
+        charging_time_new = self.calculate_charging_time(node.demand, charging_power)
+        departure_from_new = service_start_new + charging_time_new
+        
+        # 檢查服務是否能在 due_date 前完成
+        if departure_from_new > node.due_date:
+            return False, float('inf')
+        
+        # ===== 4. 計算新節點的用戶等待時間 O(1) =====
+        new_node_waiting = departure_from_new - node.ready_time
+        
+        # ===== 5. 計算對後續節點的時間偏移 O(n) worst case =====
+        # 需要檢查插入後，後續節點是否仍能滿足時間窗約束
+        
+        if pos < len(route.nodes):
+            # 有後續節點需要檢查
+            next_node = route.nodes[pos]
+            
+            # 計算到下一個節點的行駛時間
+            travel_time_to_next = self.calculate_travel_time(node, next_node, vehicle)
+            new_arrival_at_next = departure_from_new + travel_time_to_next
+            
+            # 原本的到達時間
+            old_arrival_at_next = route.arrival_times[pos]
+            
+            # 時間偏移量 (正值表示延後)
+            time_shift = new_arrival_at_next - old_arrival_at_next
+            
+            # 前向傳播檢查可行性
+            feasible, delta_successor_waiting = self._forward_propagate_check(
+                route, pos, time_shift
+            )
+            
+            if not feasible:
+                return False, float('inf')
+        else:
+            # 插入在路徑末端
+            delta_successor_waiting = 0.0
+            
+            # 檢查是否能及時返回 depot
+            travel_time_to_depot = self.calculate_travel_time(node, self.depot, vehicle)
+            return_time = departure_from_new + travel_time_to_depot
+            
+            if return_time > self.depot.due_date:
+                return False, float('inf')
+        
+        # ===== 6. 計算總 delta cost =====
+        delta_cost = new_node_waiting + delta_successor_waiting
+        
+        return True, delta_cost
+    
+    def _forward_propagate_check(self, route: Route, start_pos: int, 
+                                  time_shift: float) -> Tuple[bool, float]:
+        """
+        前向傳播時間偏移檢查
+        
+        檢查從 start_pos 開始，若到達時間延後 time_shift，後續節點是否仍可行。
+        同時計算用戶等待時間的變化量。
+        
+        Args:
+            route: 路徑
+            start_pos: 開始檢查的位置 (該位置的節點會受到影響)
+            time_shift: 時間偏移量 (正值 = 延後)
+        
+        Returns:
+            (is_feasible, delta_waiting_time)
+        """
+        if time_shift <= 0:
+            # 提前或不變，一定可行，不影響等待時間
+            return True, 0.0
+        
+        delta_waiting = 0.0
+        current_shift = time_shift
+        vehicle = route.vehicle_type
+        
+        for i in range(start_pos, len(route.nodes)):
+            node = route.nodes[i]
+            old_arrival = route.arrival_times[i]
+            new_arrival = old_arrival + current_shift
+            
+            # 檢查是否能在 due_date 前到達
+            if new_arrival > node.due_date:
+                return False, float('inf')
+            
+            # 計算新的服務開始時間
+            old_service_start = max(old_arrival, node.ready_time)
+            new_service_start = max(new_arrival, node.ready_time)
+            
+            # 充電時間不變 (demand 和 power 不變)
+            charging_time = route.departure_times[i] - old_service_start
+            
+            new_departure = new_service_start + charging_time
+            
+            # 檢查服務是否能在 due_date 前完成
+            if new_departure > node.due_date:
+                return False, float('inf')
+            
+            # 計算等待時間變化
+            old_waiting = route.user_waiting_times[i]
+            new_waiting = new_departure - node.ready_time
+            delta_waiting += (new_waiting - old_waiting)
+            
+            # 更新時間偏移量 (考慮等待時間可能吸收部分偏移)
+            old_departure = route.departure_times[i]
+            current_shift = new_departure - old_departure
+            
+            # 如果偏移量已被吸收，後續節點不受影響
+            if current_shift <= 0:
+                break
+        
+        # 檢查是否能及時返回 depot
+        if current_shift > 0:
+            old_return_time = route.total_time
+            new_return_time = old_return_time + current_shift
+            if new_return_time > self.depot.due_date:
+                return False, float('inf')
+        
+        return True, delta_waiting
+
+    
     def greedy_construction(self) -> Solution:
         """
         Greedy Construction Heuristic - Earliest Due Date First + Minimum Waiting Time Insertion
@@ -1621,28 +1789,19 @@ class ChargingSchedulingProblem:
             best_waiting_increase = float('inf')
             
             for route in candidate_routes:
-                
-                # 記錄插入前的等待時間
-                original_waiting = route.total_user_waiting_time
-                
-                # 嘗試所有可能的插入位置
+                # 使用增量檢查 (O(1) ~ O(n)) 而非完整評估 (O(n))
                 for pos in range(len(route.nodes) + 1):
-                    route.insert_node(pos, customer)
-                    if self.evaluate_route(route):
-                        waiting_increase = route.total_user_waiting_time - original_waiting
-                        if waiting_increase < best_waiting_increase:
-                            best_waiting_increase = waiting_increase
+                    feasible, delta_cost = self.incremental_insertion_check(route, pos, customer)
+                    if feasible:
+                        if delta_cost < best_waiting_increase:
+                            best_waiting_increase = delta_cost
                             best_route = route
                             best_position = pos
-                    route.remove_node(pos)
-                
-                # 還原路徑狀態
-                self.evaluate_route(route)
             
             # 如果找到可行插入點
             if best_route is not None:
                 best_route.insert_node(best_position, customer)
-                self.evaluate_route(best_route)
+                self.evaluate_route(best_route)  # 完整評估以更新路徑元數據
                 inserted = True
             
             # 如果無法插入現有路徑，開啟新車
