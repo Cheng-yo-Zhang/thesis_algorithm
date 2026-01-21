@@ -1,64 +1,46 @@
 {
-  "generated_at": "2026-01-19T17:19:09.254049",
+  "generated_at": "2026-01-21T11:14:25.881628",
   "random_seed": 42,
   "sources": {
     "base_instance": "R201.csv",
     "tight_tw_source": "R101.csv"
   },
   "config": {
-    "n_points": 25,
+    "n_points": 10,
     "urgent_ratio": 0.2,
     "normal_ratio": 0.8
   },
   "node_assignments": {
     "selected_customer_ids": [
-      59,
-      37,
-      18,
-      101,
-      19,
+      98,
       73,
-      53,
-      71,
-      69,
-      13,
-      9,
-      36,
-      47,
-      66,
-      8,
-      91,
-      44,
-      61,
-      81,
-      50,
-      93,
-      86,
-      80,
       10,
-      49
+      62,
+      43,
+      96,
+      70,
+      11,
+      21,
+      84
     ],
     "urgent_ids": [
-      36,
-      69,
-      86,
-      44,
-      19
+      96,
+      43
     ]
   },
   "statistics": {
-    "total_nodes": 26,
+    "total_nodes": 11,
     "by_type": {
-      "normal": 20,
-      "urgent": 5,
+      "normal": 8,
+      "urgent": 2,
       "depot": 1
     },
-    "total_demand": 358,
+    "total_demand": 133,
     "tw_width": {
-      "mean": 101.32,
+      "mean": 86.6,
       "min": 10,
-      "max": 180
+      "max": 177
     }
   },
-  "data_hash": "3c9fc137"
+  "data_hash": "bb517a0a"
 }

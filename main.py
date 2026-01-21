@@ -19,13 +19,21 @@ class MCSConfig:
     POWER_SLOW: float = 11.0            # kW (AC Slow Charging)
 
 
-@dataclass
+@dataclass(frozen=True)
 class UAVConfig:
-    """Unmanned Aerial Vehicle (UAV) 參數配置"""
-    SPEED: float = 60.0 / 60.0          # km/min (60 km/h)
-    CAPACITY: float = 1000000.0         # kWh 電池容量
-    POWER_FAST: float = 50.0            # kW 快充功率
-    MAX_PAYLOAD: float = 50.0           # kWh 最大載電量
+    """T-400 (engine-powered) UAV parameters for routing + mobile fast-charge module"""
+
+    # --- Flight characteristics (NOT battery-driven) ---
+    SPEED_KM_PER_MIN: float = 60.0 / 60.0      # cruise speed (km/min)
+    ENDURANCE_MIN: float = 360.0               # 6 hours
+    MAX_RANGE_KM: float = 200.0                # operational range / radius constraint
+
+    # --- Charging module carried by UAV (this is the kWh you can deliver) ---
+    CHARGE_POWER_KW: float = 50.0              # fast-charge output power
+    DELIVERABLE_ENERGY_KWH: float = 15.0       # recommended: 10~20 kWh (payload-feasible)
+
+    # --- Optional: operations overhead (helps realism in scheduling) ---
+    TAKEOFF_LAND_OVERHEAD_MIN: float = 3.0     # handling/landing/safety buffer
 
 
 @dataclass
@@ -941,8 +949,8 @@ class ALNSSolver:
             speed = self.problem.mcs.SPEED
             power = self.problem.mcs.POWER_SLOW if node.node_type == 'normal' else self.problem.mcs.POWER_FAST
         else:
-            speed = self.problem.uav.SPEED
-            power = self.problem.uav.POWER_FAST
+            speed = self.problem.uav.SPEED_KM_PER_MIN
+            power = self.problem.uav.CHARGE_POWER_KW
         
         travel_time = self.dist_matrix.get_distance(depot, node, vehicle) / speed
         service_start = max(travel_time, node.ready_time)
@@ -1416,7 +1424,7 @@ class ChargingSchedulingProblem:
         else:
             # UAV 使用歐幾里得距離
             distance = self.calculate_distance(node1, node2, distance_type='euclidean')
-            return distance / self.uav.SPEED
+            return distance / self.uav.SPEED_KM_PER_MIN
     
     def calculate_charging_time(self, energy_kwh: float, power_kw: float) -> float:
         """計算充電時間 (分鐘)"""
@@ -1450,7 +1458,7 @@ class ChargingSchedulingProblem:
             return True
         
         vehicle = route.vehicle_type
-        capacity = self.mcs.CAPACITY if vehicle == 'mcs' else self.uav.MAX_PAYLOAD
+        capacity = self.mcs.CAPACITY if vehicle == 'mcs' else self.uav.DELIVERABLE_ENERGY_KWH
         
         # 檢查載重
         if route.total_demand > capacity:
@@ -1471,6 +1479,12 @@ class ChargingSchedulingProblem:
         prev_node = self.depot
         
         for i, node in enumerate(route.nodes):
+            # ===== 動態派遣約束：不能在 READY_TIME 之前出發 =====
+            # 車輛必須等到客戶發出請求後才能開始前往該客戶
+            # 這代表真實的動態調度情境：我們無法預知客戶何時會發出請求
+            earliest_departure = node.ready_time
+            actual_departure_from_prev = max(current_time, earliest_departure)
+            
             # 計算行駛距離與時間
             travel_time = self.calculate_travel_time(prev_node, node, vehicle)
             if vehicle == 'mcs':
@@ -1479,7 +1493,7 @@ class ChargingSchedulingProblem:
                 distance = self.calculate_distance(prev_node, node, 'euclidean')
             
             route.total_distance += distance
-            arrival_time = current_time + travel_time
+            arrival_time = actual_departure_from_prev + travel_time
             
             # 檢查是否能在 due_date 前到達
             if arrival_time > node.due_date:
@@ -1487,18 +1501,17 @@ class ChargingSchedulingProblem:
                 return False
             
             # ===== 等待時間計算 =====
-            # user_waiting_time 將在計算 departure_time 後再計算
+            # 由於不能提前出發，mcs_waiting_time 理論上為 0
+            # (車輛在前一個位置等待，而非在客戶位置等待)
+            mcs_waiting_time = 0.0
             
-            # MCS 等待時間: MCS 到達後，等待用戶準備好 (READY_TIME)
-            # 若 MCS 在 READY_TIME 之前到達，MCS 需要等待
-            mcs_waiting_time = max(0.0, node.ready_time - arrival_time)
-            
-            service_start = max(arrival_time, node.ready_time)
+            # 到達即開始服務 (因為到達時間已經 >= ready_time)
+            service_start = arrival_time
             
             # ===== 動態充電模式選擇 =====
             if vehicle == 'uav':
-                # UAV: 永遠使用快充
-                charging_power = self.uav.POWER_FAST
+                # UAV: 使用充電模組功率
+                charging_power = self.uav.CHARGE_POWER_KW
                 charging_mode = 'FAST'
             else:
                 # MCS: 根據節點類型決定充電模式
@@ -1584,16 +1597,17 @@ class ChargingSchedulingProblem:
             route.is_feasible = False
             return False
         
-        # 檢查電量 (簡化：假設每公里消耗固定電量)
-        # MCS: 假設 0.5 kWh/km, UAV: 假設 0.3 kWh/km
+        # 檢查能量/範圍約束
+        # MCS: 假設每公里消耗 0.5 kWh
+        # UAV (T-400): 引擎動力，檢查作業範圍約束
         if vehicle == 'mcs':
             energy_consumed = route.total_distance * 0.5
             if energy_consumed > self.mcs.CAPACITY:
                 route.is_feasible = False
                 return False
         else:
-            energy_consumed = route.total_distance * 0.3
-            if energy_consumed > self.uav.CAPACITY:
+            # UAV 使用作業範圍約束而非電池容量
+            if route.total_distance > self.uav.MAX_RANGE_KM * 2:  # 來回距離
                 route.is_feasible = False
                 return False
         
@@ -1665,32 +1679,38 @@ class ChargingSchedulingProblem:
         if vehicle == 'mcs':
             capacity = self.mcs.CAPACITY
         else:
-            capacity = self.uav.MAX_PAYLOAD
+            capacity = self.uav.DELIVERABLE_ENERGY_KWH
         
         if route.total_demand + node.demand > capacity:
             return False, float('inf')
         
         # ===== 2. 計算到達新節點的時間 O(1) =====
+        # 動態派遣約束：不能在 READY_TIME 之前出發
         if pos == 0:
-            # 從 depot 出發
+            # 從 depot 出發，但必須等到 node.ready_time
             prev_departure_time = 0.0
             prev_node = self.depot
         else:
             prev_departure_time = route.departure_times[pos - 1]
             prev_node = route.nodes[pos - 1]
         
+        # 不能在客戶發出請求前出發
+        earliest_departure = node.ready_time
+        actual_departure = max(prev_departure_time, earliest_departure)
+        
         travel_time_to_new = self.calculate_travel_time(prev_node, node, vehicle)
-        arrival_at_new = prev_departure_time + travel_time_to_new
+        arrival_at_new = actual_departure + travel_time_to_new
         
         # 檢查是否能在 due_date 前到達
         if arrival_at_new > node.due_date:
             return False, float('inf')
         
         # ===== 3. 決定充電模式並計算服務時間 O(1) =====
-        service_start_new = max(arrival_at_new, node.ready_time)
+        # 到達即開始服務 (因為到達時間已經 >= ready_time)
+        service_start_new = arrival_at_new
         
         if vehicle == 'uav':
-            charging_power = self.uav.POWER_FAST
+            charging_power = self.uav.CHARGE_POWER_KW
         else:
             if node.node_type == 'urgent':
                 charging_power = self.mcs.POWER_FAST
@@ -1751,10 +1771,12 @@ class ChargingSchedulingProblem:
     def _forward_propagate_check(self, route: Route, start_pos: int, 
                                   time_shift: float) -> Tuple[bool, float]:
         """
-        前向傳播時間偏移檢查
+        前向傳播時間偏移檢查 (考慮動態派遣約束)
         
         檢查從 start_pos 開始，若到達時間延後 time_shift，後續節點是否仍可行。
         同時計算用戶等待時間的變化量。
+        
+        動態派遣約束：不能在客戶 READY_TIME 之前出發前往該客戶
         
         Args:
             route: 路徑
@@ -1781,9 +1803,9 @@ class ChargingSchedulingProblem:
             if new_arrival > node.due_date:
                 return False, float('inf')
             
-            # 計算新的服務開始時間
-            old_service_start = max(old_arrival, node.ready_time)
-            new_service_start = max(new_arrival, node.ready_time)
+            # 動態派遣約束下，到達即開始服務 (arrival >= ready_time)
+            old_service_start = old_arrival  # 舊邏輯下也是到達即服務
+            new_service_start = new_arrival
             
             # 充電時間不變 (demand 和 power 不變)
             charging_time = route.departure_times[i] - old_service_start
@@ -1799,9 +1821,19 @@ class ChargingSchedulingProblem:
             new_waiting = new_departure - node.ready_time
             delta_waiting += (new_waiting - old_waiting)
             
-            # 更新時間偏移量 (考慮等待時間可能吸收部分偏移)
+            # 更新時間偏移量
+            # 動態派遣約束：下一個節點的出發時間 = max(new_departure, next_node.ready_time)
+            # 所以偏移量可能因為 ready_time 約束而被「重置」
             old_departure = route.departure_times[i]
-            current_shift = new_departure - old_departure
+            
+            if i + 1 < len(route.nodes):
+                next_node = route.nodes[i + 1]
+                # 新的出發時間 (考慮動態約束)
+                new_depart_to_next = max(new_departure, next_node.ready_time)
+                old_depart_to_next = max(old_departure, next_node.ready_time)
+                current_shift = new_depart_to_next - old_depart_to_next
+            else:
+                current_shift = new_departure - old_departure
             
             # 如果偏移量已被吸收，後續節點不受影響
             if current_shift <= 0:
@@ -1846,16 +1878,12 @@ class ChargingSchedulingProblem:
         for customer in customers:
             inserted = False
             
-            # urgent 和 normal 只能由 MCS 服務
-            candidate_routes = solution.mcs_routes
-            
-            # ===== 核心改動：比較所有路徑，選擇等待時間增加最少的 =====
+            # ===== Step 1: 嘗試插入現有 MCS 路徑 =====
             best_route = None
             best_position = None
             best_waiting_increase = float('inf')
             
-            for route in candidate_routes:
-                # 使用增量檢查 (O(1) ~ O(n)) 而非完整評估 (O(n))
+            for route in solution.mcs_routes:
                 for pos in range(len(route.nodes) + 1):
                     feasible, delta_cost = self.incremental_insertion_check(route, pos, customer)
                     if feasible:
@@ -1864,29 +1892,54 @@ class ChargingSchedulingProblem:
                             best_route = route
                             best_position = pos
             
-            # 如果找到可行插入點
             if best_route is not None:
                 best_route.insert_node(best_position, customer)
-                self.evaluate_route(best_route)  # 完整評估以更新路徑元數據
+                self.evaluate_route(best_route)
                 inserted = True
             
-            # 如果無法插入現有路徑，開啟新車
+            # ===== Step 2: 現有 MCS 無法服務，嘗試開啟新 MCS =====
+            # (MCS 優先於 UAV)
             if not inserted:
-                # 優先嘗試 MCS
-                new_route = Route(vehicle_type='mcs')
-                new_route.add_node(customer)
-                if self.evaluate_route(new_route):
-                    solution.add_mcs_route(new_route)
+                new_mcs = Route(vehicle_type='mcs')
+                new_mcs.add_node(customer)
+                if self.evaluate_route(new_mcs):
+                    solution.add_mcs_route(new_mcs)
                     inserted = True
-                else:
-                    # MCS 無法服務，嘗試派遣 UAV
-                    uav_route = Route(vehicle_type='uav')
-                    uav_route.add_node(customer)
-                    if self.evaluate_route(uav_route):
-                        solution.add_uav_route(uav_route)
-                        inserted = True
-                    else:
-                        solution.unassigned_nodes.append(customer)
+            
+            # ===== Step 3: 所有 MCS 選項都失敗，嘗試現有 UAV 路徑 =====
+            if not inserted:
+                best_uav_route = None
+                best_uav_position = None
+                best_uav_waiting = float('inf')
+                
+                for route in solution.uav_routes:
+                    for pos in range(len(route.nodes) + 1):
+                        feasible, delta_cost = self.incremental_insertion_check(route, pos, customer)
+                        if feasible:
+                            if delta_cost < best_uav_waiting:
+                                best_uav_waiting = delta_cost
+                                best_uav_route = route
+                                best_uav_position = pos
+                
+                if best_uav_route is not None:
+                    best_uav_route.insert_node(best_uav_position, customer)
+                    self.evaluate_route(best_uav_route)
+                    inserted = True
+            
+            # ===== Step 4: MCS 無法服務，嘗試派遣新 UAV =====
+            # (UAV 速度較快，可能可以在 due_date 前完成服務)
+            if not inserted:
+                new_uav = Route(vehicle_type='uav')
+                new_uav.add_node(customer)
+                if self.evaluate_route(new_uav):
+                    solution.add_uav_route(new_uav)
+                    inserted = True
+                    print(f"  [UAV 派遣] 節點 {customer.id} (type={customer.node_type}): MCS 無法在時限內完成，改派 UAV")
+            
+            # ===== Step 5: UAV 也無法服務，標記為未分配 =====
+            if not inserted:
+                solution.unassigned_nodes.append(customer)
+                print(f"  [警告] 節點 {customer.id} 無法被任何車輛服務!")
         
         # 計算總成本 (傳入總客戶數以計算覆蓋率)
         solution.calculate_total_cost(total_customers=len(customers))
@@ -1941,11 +1994,13 @@ class ChargingSchedulingProblem:
         print(f"  電池容量: {self.mcs.CAPACITY} kWh")
         print(f"  快充功率: {self.mcs.POWER_FAST} kW")
         print(f"  慢充功率: {self.mcs.POWER_SLOW} kW")
-        print("\nUAV 參數配置:")
-        print(f"  速度: {self.uav.SPEED:.3f} km/min ({self.uav.SPEED * 60:.1f} km/h)")
-        print(f"  電池容量: {self.uav.CAPACITY} kWh")
-        print(f"  快充功率: {self.uav.POWER_FAST} kW")
-        print(f"  最大載電量: {self.uav.MAX_PAYLOAD} kWh")
+        print("\nUAV (T-400 Engine-Powered) 參數配置:")
+        print(f"  巡航速度: {self.uav.SPEED_KM_PER_MIN:.3f} km/min ({self.uav.SPEED_KM_PER_MIN * 60:.1f} km/h)")
+        print(f"  續航時間: {self.uav.ENDURANCE_MIN} min ({self.uav.ENDURANCE_MIN / 60:.1f} hours)")
+        print(f"  最大作業範圍: {self.uav.MAX_RANGE_KM} km")
+        print(f"  充電模組輸出功率: {self.uav.CHARGE_POWER_KW} kW")
+        print(f"  可傳輸電量: {self.uav.DELIVERABLE_ENERGY_KWH} kWh")
+        print(f"  起降作業開銷: {self.uav.TAKEOFF_LAND_OVERHEAD_MIN} min")
         print("="*80 + "\n")
 
 
