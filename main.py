@@ -1230,11 +1230,77 @@ class ChargingSchedulingProblem:
         np.random.seed(self.config.RANDOM_SEED)
     
     def load_data(self, filepath: str) -> None:
-        """讀取 CSV 資料"""
+        """
+        讀取 CSV 資料並進行輸入驗證
+        
+        Validates:
+        - Required columns exist
+        - No NaN values in required numeric fields
+        - NODE_TYPE values are valid ('depot', 'normal', 'urgent')
+        
+        Args:
+            filepath: CSV 檔案路徑
+            
+        Raises:
+            ValueError: 當 CSV 資料驗證失敗時
+        """
         df = pd.read_csv(filepath)
         
-        # 檢查是否有 NODE_TYPE 欄位
+        # ===== 1. 驗證必要欄位是否存在 =====
+        required_columns = ['CUST NO.', 'XCOORD.', 'YCOORD.', 'DEMAND', 
+                           'READY TIME', 'DUE DATE', 'SERVICE TIME']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise ValueError(
+                f"CSV 缺少必要欄位: {missing_columns}\n"
+                f"必要欄位: {required_columns}"
+            )
+        
+        # ===== 2. 驗證數值欄位是否有 NaN =====
+        numeric_columns = ['CUST NO.', 'XCOORD.', 'YCOORD.', 'DEMAND', 
+                          'READY TIME', 'DUE DATE', 'SERVICE TIME']
+        nan_report = []
+        for col in numeric_columns:
+            nan_rows = df[df[col].isna()].index.tolist()
+            if nan_rows:
+                nan_report.append(f"  - {col}: 第 {[r + 2 for r in nan_rows]} 行 (CSV 行號)")
+        
+        if nan_report:
+            raise ValueError(
+                f"CSV 中發現 NaN 缺失值:\n" + "\n".join(nan_report)
+            )
+        
+        # ===== 3. 驗證 NODE_TYPE 欄位 (若存在) =====
         has_node_type = 'NODE_TYPE' in df.columns
+        valid_node_types = {'depot', 'normal', 'urgent'}
+        
+        if has_node_type:
+            # 檢查 NODE_TYPE 是否有 NaN
+            nan_node_type_rows = df[df['NODE_TYPE'].isna()].index.tolist()
+            if nan_node_type_rows:
+                raise ValueError(
+                    f"NODE_TYPE 欄位存在 NaN 缺失值:\n"
+                    f"  第 {[r + 2 for r in nan_node_type_rows]} 行 (CSV 行號)"
+                )
+            
+            # 檢查 NODE_TYPE 值是否有效
+            df['_node_type_lower'] = df['NODE_TYPE'].astype(str).str.strip().str.lower()
+            invalid_mask = ~df['_node_type_lower'].isin(valid_node_types)
+            invalid_rows = df[invalid_mask]
+            
+            if not invalid_rows.empty:
+                invalid_report = []
+                for idx, row in invalid_rows.iterrows():
+                    invalid_report.append(
+                        f"  - 第 {idx + 2} 行: NODE_TYPE='{row['NODE_TYPE']}'"
+                    )
+                raise ValueError(
+                    f"CSV 中發現無效的 NODE_TYPE 值:\n" + "\n".join(invalid_report) +
+                    f"\n有效的 NODE_TYPE 值: {valid_node_types}"
+                )
+            
+            # 清理臨時欄位
+            df = df.drop(columns=['_node_type_lower'])
         
         for idx, row in df.iterrows():
             # 讀取節點類型 (若有)
