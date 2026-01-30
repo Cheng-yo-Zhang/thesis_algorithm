@@ -1310,6 +1310,15 @@ class ChargingSchedulingProblem:
             # 清理臨時欄位
             df = df.drop(columns=['_node_type_lower'])
         
+        # ===== 4. 讀取 depot 的 due_date (用於限制客戶時間窗上界) =====
+        depot_due_date = float(df.iloc[0]['DUE DATE'])
+        
+        # ===== 5. 時間窗放大係數 (適應充電服務時間需求) =====
+        # Normal 節點: 3 倍 (慢充有較多時間緩衝)
+        # Urgent 節點: 6 倍 (需要更多時間讓 UAV 到達並完成快充服務)
+        TW_SCALE_NORMAL = 3.0
+        TW_SCALE_URGENT = 6.0
+        
         for idx, row in df.iterrows():
             # 讀取節點類型 (若有)
             if has_node_type:
@@ -1317,13 +1326,32 @@ class ChargingSchedulingProblem:
             else:
                 node_type = 'normal'
             
+            ready_time = float(row['READY TIME'])
+            original_due_date = float(row['DUE DATE'])
+            
+            # 對客戶節點放大時間窗寬度，depot 保持不變
+            if idx == 0:
+                # Depot: 保持原始時間窗
+                due_date = original_due_date
+            else:
+                # 根據節點類型選擇放大係數
+                if node_type == 'urgent':
+                    scale = TW_SCALE_URGENT
+                else:
+                    scale = TW_SCALE_NORMAL
+                
+                # 時間窗寬度放大，但不超過 depot 的 due_date
+                time_window_width = original_due_date - ready_time
+                scaled_due_date = ready_time + (time_window_width * scale)
+                due_date = min(scaled_due_date, depot_due_date)
+            
             node = Node(
                 id=int(row['CUST NO.']),
                 x=float(row['XCOORD.']),
                 y=float(row['YCOORD.']),
                 demand=float(row['DEMAND']),
-                ready_time=float(row['READY TIME']),
-                due_date=float(row['DUE DATE']),
+                ready_time=ready_time,
+                due_date=due_date,
                 service_time=float(row['SERVICE TIME']),
                 node_type=node_type
             )
