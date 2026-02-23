@@ -22,7 +22,7 @@ class MCSConfig:
     POWER_SLOW: float = 11.0            # kW (AC Slow Charging)
 
 
-@dataclass(frozen=True)
+@dataclass
 class UAVConfig:
     """T-400 (engine-powered) UAV parameters for routing + mobile fast-charge module"""
 
@@ -75,7 +75,7 @@ class Route:
         self.nodes: List[Node] = []  # 路徑上的節點序列 (不含 depot)
         self.departure_times: List[float] = []  # 各節點的出發時間
         self.arrival_times: List[float] = []  # 各節點的到達時間
-        self.user_waiting_times: List[float] = []  # 各節點的用戶等待時間 (用戶發出請求後等充電完成 = departure - ready)
+        self.user_waiting_times: List[float] = []  # 各節點的用戶等待時間 (用戶發出請求後等待車輛到達 = arrival - ready)
         self.mcs_waiting_times: List[float] = []  # 各節點的 MCS 等待時間 (MCS 到達後等用戶準備好)
         self.charging_modes: List[str] = []  # 各節點的充電模式 ('FAST' 或 'SLOW')
         self.total_distance: float = 0.0
@@ -514,6 +514,7 @@ class ChargingSchedulingProblem:
         self.nodes: List[Node] = []
         self.depot: Node = None
         self.urgent_indices: Set[int] = set()
+        self.dist_matrix = None
         
         # 設定隨機種子
         random.seed(self.config.RANDOM_SEED)
@@ -629,6 +630,8 @@ class ChargingSchedulingProblem:
         print(f"載入 {len(self.nodes) - 1} 個節點")
         if has_node_type:
             print(f"節點類型分布: {type_counts}")
+        
+        self.dist_matrix = DistanceMatrix(self.nodes)
     
     def assign_node_types(self, use_csv_types: bool = True) -> None:
         """
@@ -637,7 +640,6 @@ class ChargingSchedulingProblem:
         Args:
             use_csv_types: 是否使用 CSV 中已定義的節點類型。
                           若為 True，則根據已讀取的 node_type 建立索引集合。
-                          若為 False，則隨機分配節點類型（舊行為）。
         """
         customer_indices = [i for i in range(1, len(self.nodes))]
         num_customers = len(customer_indices)
@@ -650,45 +652,18 @@ class ChargingSchedulingProblem:
             normal_indices = [
                 i for i in customer_indices if self.nodes[i].node_type == 'normal'
             ]
-        else:
-            # 舊行為：隨機分配節點類型
-            num_urgent = int(num_customers * self.config.URGENT_RATIO)
-            self.urgent_indices = set(random.sample(customer_indices, num_urgent))
-            
-            for idx in self.urgent_indices:
-                self.nodes[idx].node_type = 'urgent'
-                new_due = self.nodes[idx].ready_time + self.config.TW_URGENT
-                self.nodes[idx].due_date = min(new_due, self.depot.due_date)
-            
-            normal_indices = [
-                i for i in customer_indices 
-                if i not in self.urgent_indices
-            ]
-            for idx in normal_indices:
-                new_due = self.nodes[idx].ready_time + self.config.TW_NORMAL
-                self.nodes[idx].due_date = min(new_due, self.depot.due_date)
         
         print(f"Urgent 節點: {len(self.urgent_indices)} 個")
         print(f"Normal 節點: {len(normal_indices)} 個")
     
     def calculate_distance(self, node1: Node, node2: Node, distance_type: str = 'euclidean') -> float:
-        """
-        計算兩節點間的距離
-        
-        Args:
-            node1: 起點節點
-            node2: 終點節點
-            distance_type: 'euclidean' (歐幾里得) 或 'manhattan' (曼哈頓)
-        
-        Returns:
-            距離值
-        """
+        if self.dist_matrix is not None:
+            vehicle = 'mcs' if distance_type == 'manhattan' else 'uav'
+            return self.dist_matrix.get_distance(node1, node2, vehicle)
+        # Fallback (防呆)
         if distance_type == 'manhattan':
-            # 曼哈頓距離 (適用於地面車輛 MCS)
             return abs(node1.x - node2.x) + abs(node1.y - node2.y)
-        else:
-            # 歐幾里得距離 (適用於 UAV 直線飛行)
-            return np.sqrt((node1.x - node2.x)**2 + (node1.y - node2.y)**2)
+        return np.sqrt((node1.x - node2.x)**2 + (node1.y - node2.y)**2)
     
     def calculate_travel_time(self, node1: Node, node2: Node, vehicle: str = 'mcs') -> float:
         """
@@ -709,238 +684,187 @@ class ChargingSchedulingProblem:
         else:
             # UAV 使用歐幾里得距離
             distance = self.calculate_distance(node1, node2, distance_type='euclidean')
-            return distance / self.uav.SPEED_KM_PER_MIN
+            flight_time = distance / self.uav.SPEED_KM_PER_MIN
+            # 若是移動到不同的節點，需加上起降準備時間
+            if node1.id != node2.id:
+                return flight_time + self.uav.TAKEOFF_LAND_OVERHEAD_MIN
+            return flight_time
     
     def calculate_charging_time(self, energy_kwh: float, power_kw: float) -> float:
         """計算充電時間 (分鐘)"""
         return (energy_kwh / power_kw) * 60.0
     
+    def get_charging_profile(self, vehicle: str, node_type: str, demand: float) -> Tuple[str, float]:
+        """
+        O(1) 取得綁定的充電模式與服務時間
+        - UAV 嚴格使用 UAV 快充
+        - MCS + Urgent 嚴格使用 MCS 快充
+        - MCS + Normal 嚴格使用 MCS 慢充
+        """
+        if vehicle == 'uav':
+            return 'FAST', self.calculate_charging_time(demand, self.uav.CHARGE_POWER_KW)
+        
+        # 車輛為 MCS
+        if node_type == 'urgent':
+            return 'FAST', self.calculate_charging_time(demand, self.mcs.POWER_FAST)
+        else:
+            return 'SLOW', self.calculate_charging_time(demand, self.mcs.POWER_SLOW)
+
     def evaluate_route(self, route: Route) -> bool:
-        """
-        評估並更新路徑的時間、距離、可行性
-        
-        實現 Multi-mode MCS 充電模式選擇:
-        - UAV: 永遠使用 POWER_FAST
-        - MCS + Urgent: 必須使用 POWER_FAST
-        - MCS + Normal: 優先嘗試 POWER_SLOW，若不可行則改用 POWER_FAST
-        
-        Args:
-            route: 要評估的路徑
-        
-        Returns:
-            是否為可行路徑
-        """
+        """評估路徑可行性 (嚴格充電模式版)"""
         if len(route.nodes) == 0:
             route.is_feasible = True
-            route.total_distance = 0.0
-            route.total_time = 0.0
-            route.total_waiting_time = 0.0
-            route.arrival_times = []
-            route.departure_times = []
-            route.user_waiting_times = []
-            route.mcs_waiting_times = []
-            route.charging_modes = []
+            route.total_distance = route.total_time = route.total_waiting_time = 0.0
+            route.arrival_times, route.departure_times = [], []
+            route.user_waiting_times, route.mcs_waiting_times, route.charging_modes = [], [], []
             return True
-        
+            
         vehicle = route.vehicle_type
         capacity = self.mcs.CAPACITY if vehicle == 'mcs' else self.uav.DELIVERABLE_ENERGY_KWH
         
-        # 檢查載重
+        # 1. 載重檢查
         if route.total_demand > capacity:
             route.is_feasible = False
             return False
+            
+        # 初始化狀態變數
+        route.arrival_times, route.departure_times, route.charging_modes = [], [], []
+        route.user_waiting_times, route.mcs_waiting_times = [], []
+        route.total_distance = route.total_user_waiting_time = 0.0
         
-        # 計算時間與距離
-        route.arrival_times = []
-        route.departure_times = []
-        route.user_waiting_times = []
-        route.mcs_waiting_times = []
-        route.charging_modes = []
-        route.total_distance = 0.0
-        route.total_user_waiting_time = 0.0
-        route.total_mcs_waiting_time = 0.0
-        
-        current_time = 0.0  # 從 depot 出發時間
+        current_time = 0.0 
         prev_node = self.depot
         
+        # 2. 節點巡迴評估
         for i, node in enumerate(route.nodes):
-            # ===== 動態派遣約束：不能在 READY_TIME 之前出發 =====
-            # 車輛必須等到客戶發出請求後才能開始前往該客戶
-            # 這代表真實的動態調度情境：我們無法預知客戶何時會發出請求
-            earliest_departure = node.ready_time
-            actual_departure_from_prev = max(current_time, earliest_departure)
+            # 動態派遣約束：不能早於 ready_time 出發
+            actual_departure = max(current_time, node.ready_time)
             
-            # 計算行駛距離與時間
+            # 取得距離與行駛時間 (建議這裡已改用 DistanceMatrix 查表)
             travel_time = self.calculate_travel_time(prev_node, node, vehicle)
-            if vehicle == 'mcs':
-                distance = self.calculate_distance(prev_node, node, 'manhattan')
-            else:
-                distance = self.calculate_distance(prev_node, node, 'euclidean')
+            dist_type = 'manhattan' if vehicle == 'mcs' else 'euclidean'
+            distance = self.calculate_distance(prev_node, node, dist_type) 
             
             route.total_distance += distance
-            arrival_time = actual_departure_from_prev + travel_time
+            arrival_time = actual_departure + travel_time
             
-            # 檢查是否能在 due_date 前到達
+            # 檢查：到達時間是否已經超時？
             if arrival_time > node.due_date:
                 route.is_feasible = False
                 return False
+                
+            # 嚴格綁定充電模式與時間
+            mode, service_time = self.get_charging_profile(vehicle, node.node_type, node.demand)
+            departure_time = arrival_time + service_time
             
-            # ===== 等待時間計算 =====
-            # 由於不能提前出發，mcs_waiting_time 理論上為 0
-            # (車輛在前一個位置等待，而非在客戶位置等待)
-            mcs_waiting_time = 0.0
-            
-            # 到達即開始服務 (因為到達時間已經 >= ready_time)
-            service_start = arrival_time
-            
-            # ===== 動態充電模式選擇 =====
-            if vehicle == 'uav':
-                # UAV: 使用充電模組功率
-                charging_power = self.uav.CHARGE_POWER_KW
-                charging_mode = 'FAST'
-            else:
-                # MCS: 根據節點類型決定充電模式
-                if node.node_type == 'urgent':
-                    # Urgent 節點: 必須使用快充
-                    charging_power = self.mcs.POWER_FAST
-                    charging_mode = 'FAST'
-                else:
-                    # Normal 節點: 優先嘗試慢充
-                    # 計算慢充所需時間
-                    slow_service_time = self.calculate_charging_time(node.demand, self.mcs.POWER_SLOW)
-                    slow_departure_time = service_start + slow_service_time
-                    
-                    # 檢查慢充可行性
-                    slow_feasible = True
-                    
-                    # 條件 1: 慢充是否會超過當前節點的 due_date?
-                    if slow_departure_time > node.due_date:
-                        slow_feasible = False
-                    
-                    # 條件 2: 慢充是否會導致下一個節點無法在 deadline 前到達?
-                    if slow_feasible and i + 1 < len(route.nodes):
-                        next_node = route.nodes[i + 1]
-                        travel_to_next = self.calculate_travel_time(node, next_node, vehicle)
-                        arrival_at_next = slow_departure_time + travel_to_next
-                        if arrival_at_next > next_node.due_date:
-                            slow_feasible = False
-                    
-                    # 條件 3: 慢充是否會導致無法及時返回 depot?
-                    if slow_feasible and i == len(route.nodes) - 1:
-                        travel_to_depot = self.calculate_travel_time(node, self.depot, vehicle)
-                        return_time = slow_departure_time + travel_to_depot
-                        if return_time > self.depot.due_date:
-                            slow_feasible = False
-                    
-                    # 決定充電模式: Normal 強制使用 Slow Charging
-                    # 若 Slow 不可行，則此路徑無法服務該節點
-                    if slow_feasible:
-                        charging_power = self.mcs.POWER_SLOW
-                        charging_mode = 'SLOW'
-                    else:
-                        # Normal 節點強制 Slow，無法 fallback 到 Fast
-                        route.is_feasible = False
-                        return False
-            
-            # 計算實際服務時間
-            service_time = self.calculate_charging_time(node.demand, charging_power)
-            departure_time = service_start + service_time
-            
-            # ===== 檢查充電是否在 due_date 內完成 =====
-            # 所有節點類型都必須在 due_date 前完成充電
+            # 檢查：嚴格模式下，充電完成時間是否超時？ (如果慢充超時，此路徑直接判為不可行)
             if departure_time > node.due_date:
                 route.is_feasible = False
                 return False
-            
-            # ===== 計算用戶等待時間 (純等待到達) =====
-            # user_waiting_time = 用戶從發出請求到 MCS 到達的時間
+                
             user_waiting_time = arrival_time - node.ready_time
             
+            # 記錄狀態
             route.arrival_times.append(arrival_time)
             route.departure_times.append(departure_time)
+            route.charging_modes.append(mode)
             route.user_waiting_times.append(user_waiting_time)
-            route.mcs_waiting_times.append(mcs_waiting_time)
-            route.charging_modes.append(charging_mode)
+            route.mcs_waiting_times.append(0.0) 
             route.total_user_waiting_time += user_waiting_time
-            route.total_mcs_waiting_time += mcs_waiting_time
             
             current_time = departure_time
             prev_node = node
-        
-        # 返回 depot
+            
+        # 3. 返回 Depot 評估
         travel_time_back = self.calculate_travel_time(prev_node, self.depot, vehicle)
-        if vehicle == 'mcs':
-            distance_back = self.calculate_distance(prev_node, self.depot, 'manhattan')
-        else:
-            distance_back = self.calculate_distance(prev_node, self.depot, 'euclidean')
-        
-        route.total_distance += distance_back
+        dist_type = 'manhattan' if vehicle == 'mcs' else 'euclidean'
+        route.total_distance += self.calculate_distance(prev_node, self.depot, dist_type)
         route.total_time = current_time + travel_time_back
         
-        # 檢查是否能在 depot 的 due_date 前返回
+        # 檢查：是否能在營業結束前返回？
         if route.total_time > self.depot.due_date:
             route.is_feasible = False
             return False
-        
-        # 檢查能量/範圍約束
-        # MCS: 假設每公里消耗 0.5 kWh
-        # UAV (T-400): 引擎動力，檢查作業範圍約束
-        if vehicle == 'mcs':
-            energy_consumed = route.total_distance * 0.5
-            if energy_consumed > self.mcs.CAPACITY:
-                route.is_feasible = False
-                return False
-        else:
-            # UAV 使用作業範圍約束而非電池容量
-            if route.total_distance > self.uav.MAX_RANGE_KM * 2:  # 來回距離
-                route.is_feasible = False
-                return False
-        
+            
+        # 4. 能源與航程約束檢查
+        if vehicle == 'mcs' and (route.total_distance * 0.5) > self.mcs.CAPACITY:
+            route.is_feasible = False
+            return False
+        elif vehicle == 'uav' and route.total_distance > self.uav.MAX_RANGE_KM * 2:
+            route.is_feasible = False
+            return False
+            
         route.is_feasible = True
         return True
     
     def try_insert_node(self, route: Route, node: Node, position: int = None) -> bool:
         """
-        嘗試在路徑的指定位置插入節點
+        嘗試在路徑的指定位置插入節點 (極速優化版)
         
-        插入準則：最小化用戶等待時間（與目標函數一致）
-        
-        Args:
-            route: 目標路徑
-            node: 要插入的節點
-            position: 插入位置 (None 表示嘗試所有位置找最佳)
-        
-        Returns:
-            是否成功插入
+        插入準則：
+        1. 優先最小化「用戶等待時間變化量」
+        2. 若等待時間變化量相同，則以「距離變化量」作為 Tie-breaker
         """
+        # --- 情境 1: 指定位置插入 ---
         if position is not None:
-            # 在指定位置插入
-            route.insert_node(position, node)
-            if self.evaluate_route(route):
+            # 這裡可以直接用你的增量檢查
+            is_feasible, _ = self.incremental_insertion_check(route, position, node)
+            if is_feasible:
+                route.insert_node(position, node)
+                self.evaluate_route(route)  # 確定要插入了，才更新整條路線的狀態
                 return True
-            else:
-                route.remove_node(position)
-                return False
-        
-        # 嘗試所有可能的插入位置，找到用戶等待時間最小的位置
+            return False
+            
+        # --- 情境 2: 尋找最佳位置 (Best Insertion) ---
         best_position = None
-        best_waiting_time = float('inf')
+        best_delta_wait = float('inf')
+        best_delta_dist = float('inf')
+        
+        vehicle = route.vehicle_type
+        dist_type = 'manhattan' if vehicle == 'mcs' else 'euclidean'
         
         for pos in range(len(route.nodes) + 1):
-            route.insert_node(pos, node)
-            if self.evaluate_route(route):
-                # 以用戶等待時間為主要準則，距離作為 tie-breaker
-                if route.total_user_waiting_time < best_waiting_time:
-                    best_waiting_time = route.total_user_waiting_time
+            # 🚀 效能關鍵：使用增量檢查，不修改實際陣列，不跑完整 evaluate
+            is_feasible, delta_wait = self.incremental_insertion_check(route, pos, node)
+            
+            if is_feasible:
+                # 若等待時間嚴格更小，直接取代
+                if delta_wait < best_delta_wait:
+                    best_delta_wait = delta_wait
                     best_position = pos
-            route.remove_node(pos)
-        
+                    # (可選) 為了接下來可能的 tie-breaker，先不精算距離，等平手再算
+                    
+                # ⚖️ 實作真正的 Tie-breaker: 若等待時間一樣，比距離變化量
+                elif delta_wait == best_delta_wait and best_position is not None:
+                    # 只有平手時才去計算距離變化量，節省資源
+                    # 1. 計算當前 pos 的距離變化
+                    dist_pos = self._calculate_insertion_delta_dist(route, pos, node, dist_type)
+                    # 2. 計算 best_position 的距離變化
+                    dist_best = self._calculate_insertion_delta_dist(route, best_position, node, dist_type)
+                    
+                    if dist_pos < dist_best:
+                        best_position = pos
+                        
+        # 找到了最佳位置，正式安插並更新狀態
         if best_position is not None:
             route.insert_node(best_position, node)
-            self.evaluate_route(route)
+            self.evaluate_route(route)  # 正式更新 arrival_times 等內部狀態
             return True
-        
+            
         return False
+
+    def _calculate_insertion_delta_dist(self, route: Route, pos: int, node: Node, dist_type: str) -> float:
+        """輔助函數：計算在特定位置插入節點所產生的距離變化量 (同樣建議改為查表法)"""
+        prev_node = self.depot if pos == 0 else route.nodes[pos - 1]
+        next_node = self.depot if pos == len(route.nodes) else route.nodes[pos]
+        
+        # 增加的距離：(前 -> 新) + (新 -> 後)
+        add_dist = self.calculate_distance(prev_node, node, dist_type) + \
+                   self.calculate_distance(node, next_node, dist_type)
+        # 減少的距離：(前 -> 後)
+        sub_dist = self.calculate_distance(prev_node, next_node, dist_type)
+        
+        return add_dist - sub_dist
     
     def incremental_insertion_check(self, route: Route, pos: int, node: Node) -> Tuple[bool, float]:
         """
@@ -991,19 +915,10 @@ class ChargingSchedulingProblem:
             return False, float('inf')
         
         # ===== 3. 決定充電模式並計算服務時間 O(1) =====
-        # 到達即開始服務 (因為到達時間已經 >= ready_time)
         service_start_new = arrival_at_new
         
-        if vehicle == 'uav':
-            charging_power = self.uav.CHARGE_POWER_KW
-        else:
-            if node.node_type == 'urgent':
-                charging_power = self.mcs.POWER_FAST
-            else:
-                # Normal 節點強制使用 Slow Charging
-                charging_power = self.mcs.POWER_SLOW
-        
-        charging_time_new = self.calculate_charging_time(node.demand, charging_power)
+        # 直接呼叫我們剛才寫好的嚴格綁定函數
+        mode, charging_time_new = self.get_charging_profile(vehicle, node.node_type, node.demand)
         departure_from_new = service_start_new + charging_time_new
         
         # 檢查服務是否能在 due_date 前完成
@@ -1164,205 +1079,110 @@ class ChargingSchedulingProblem:
                 return False, float('inf')
         
         return True, delta_waiting
-
-    
-    def cluster_customers(self) -> Tuple[np.ndarray, np.ndarray, int]:
-        """
-        對客戶進行時空分群 (Spatial + Temporal Clustering)
-        
-        Returns:
-            labels: 每個節點的群聚標籤
-            centroids: 群聚中心座標 (K, 2)
-            n_clusters: 群聚數量
-        """
-        # 1. 準備特徵數據 (X, Y, ReadyTime)
-        customers = [n for n in self.nodes if n.node_type != 'depot']
-        features = []
-        
-        for n in customers:
-            features.append([n.x, n.y, n.ready_time])
-            
-        data = np.array(features)
-        
-        # 2. 標準化 (因為時間和空間的尺度不同)
-        scaler = StandardScaler()
-        data_scaled = scaler.fit_transform(data)
-        
-        # 3. 決定最佳群數 (使用 Silhouette Score)
-        best_score = -1
-        best_k = 2
-        
-        # 嘗試 k 從 3 到 sqrt(N) * 2 或 15 (視規模而定)
-        min_k = 3
-        max_k = min(len(customers) // 2, 15)  # 避免過多群
-        if max_k < min_k: 
-            max_k = min_k
-            
-        # 如果客戶太少，直接視為一群或兩群
-        if len(customers) < min_k + 2:
-            kmeans = KMeans(n_clusters=1, random_state=self.config.RANDOM_SEED, n_init=10)
-            labels = kmeans.fit_predict(data_scaled)
-            return labels, kmeans.cluster_centers_[:, :2], 1  # Centroids 只取前兩維 (x, y) ? 
-            # 注意: KMeans centroid 是在 scaled space，需要 inverse transform 才能得到真實座標
-            # 這裡簡化：MCS 預派遣位置可以設在該群 "所有節點座標的平均值" (真實空間)
-        
-        best_labels = None
-        
-        for k in range(min_k, max_k + 1):
-            kmeans = KMeans(n_clusters=k, random_state=self.config.RANDOM_SEED, n_init=10)
-            labels = kmeans.fit_predict(data_scaled)
-            
-            # 只有一類無法計算 silhouette
-            if len(set(labels)) < 2:
-                continue
-                
-            score = silhouette_score(data_scaled, labels)
-            
-            if score > best_score:
-                best_score = score
-                best_k = k
-                best_labels = labels
-        
-        # 4. 根據最佳 k 重新訓練或直接使用
-        n_clusters = best_k
-        labels = best_labels
-        
-        # 5. 計算真實空間的群聚中心 (Centroids)
-        # 用於 MCS 預派遣位置
-        centroids = []
-        for k in range(n_clusters):
-            # 找出屬於該群的客戶
-            cluster_indices = [i for i, label in enumerate(labels) if label == k]
-            cluster_nodes = [customers[i] for i in cluster_indices]
-            
-            if not cluster_nodes:
-                continue
-                
-            # 平均位置
-            avg_x = np.mean([n.x for n in cluster_nodes])
-            avg_y = np.mean([n.y for n in cluster_nodes])
-            centroids.append((avg_x, avg_y))
-            
-        return labels, np.array(centroids), n_clusters
-
-    def cluster_based_construction(self) -> Solution:
-        """
-        Cluster-Based Construction Heuristic
-        
-        策略：
-        1. 使用 K-Means 對客戶進行分群 (考量位置 + Ready Time)
-        2. 每個群指派一台 MCS，位置設為群中心 (Centroid)
-        3. 該 MCS 優先服務群內客戶
-        4. 群內客戶排序：Earliest Due Date First (EDD)
-        5. 當群內客戶無法被 MCS 服務時 (時間窗/電量)，嘗試 UAV
-        
-        Returns:
-            初始解
-        """
-        solution = Solution()
-        customers = [n for n in self.nodes if n.node_type != 'depot']
-        
-        # Step 1: 分群
-        labels, centroids, n_clusters = self.cluster_customers()
-        
-        print(f"K-Means Clustering Result: k={n_clusters}")
         
     def parallel_insertion_construction(self) -> Solution:
         """
-        Parallel Insertion Construction Heuristic
+        真・平行插入構造啟發式 (True Parallel Insertion)
         
-        策略：
-        1. 全局排序：優先處理 Urgent 節點，其次依 Due Date (EDD)
-        2. 平行插入：嘗試將每個客戶插入現有的 MCS 路徑中 (最小化邊際成本)
-        3. 動態開車：若無法插入現有路徑，則開啟新 MCS 路徑
-        4. UAV 補救：若 MCS 無法服務 (時間窗/電量)，嘗試 UAV
-        
-        這種 "Parallel Insertion" 策略比 Cluster-First 更靈活，
-        特別適合處理 Urgent 節點和緊迫的時間窗。
-        
-        Returns:
-            初始解
+        策略升級：
+        1. Urgent 節點：同時評估現有 MCS 與 UAV 路徑，選擇「邊際等待時間最小」的位置插入。
+        2. Normal 節點：嚴格限制只能評估並插入 MCS 路徑 (綁定慢充)。
+        3. 動態開車：若無法插入現有路徑，Urgent 節點會比較新開 UAV 與新開 MCS 誰的成本低；Normal 節點只能新開 MCS。
         """
         solution = Solution()
         customers = [n for n in self.nodes if n.node_type != 'depot']
         
-        # Step 1: 排序 (Sorting)
-        # 排序權重：Urgent (-1) 優先於 Normal (0)，同類型依 Due Date 排序
-        # 這樣可以確保 Urgent 節點優先被安排
+        # Step 1: 排序 (Urgent 優先)
         customers.sort(key=lambda n: (0 if n.node_type == 'urgent' else 1, n.due_date))
-        
-        print(f"Sorted Customers ({len(customers)}):")
-        for n in customers:
-            print(f"  - Node {n.id}: Type={n.node_type}, Ready={n.ready_time}, Due={n.due_date:.1f}, Demand={n.demand}")
         
         unassigned = []
         
-        # Step 2: 平行插入 (Parallel Insertion)
+        # Step 2: 核心平行插入
         for node in customers:
+            best_route_type = None
             best_route_idx = -1
             best_position = -1
             min_marginal_cost = float('inf')
             
-            # 2.1 嘗試插入現有 MCS 路徑
+            # --- 2.1 評估現有 MCS 路徑 (所有節點都可以嘗試) ---
             for r_idx, route in enumerate(solution.mcs_routes):
-                # 嘗試所有位置
                 for pos in range(len(route.nodes) + 1):
-                    # 使用增量檢查 O(1)
+                    # 這裡會自動呼叫極速版的 incremental_insertion_check
                     feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
-                    
                     if feasible and delta_cost < min_marginal_cost:
                         min_marginal_cost = delta_cost
+                        best_route_type = 'mcs'
                         best_route_idx = r_idx
                         best_position = pos
             
-            # 2.2 執行最佳插入
+            # --- 2.2 評估現有 UAV 路徑 (🚨 嚴格限制：僅限 Urgent 節點) ---
+            if node.node_type == 'urgent':
+                for r_idx, route in enumerate(solution.uav_routes):
+                    for pos in range(len(route.nodes) + 1):
+                        feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
+                        if feasible and delta_cost < min_marginal_cost:
+                            min_marginal_cost = delta_cost
+                            best_route_type = 'uav'
+                            best_route_idx = r_idx
+                            best_position = pos
+            
+            # --- 2.3 執行全局最佳插入 ---
             inserted_successfully = False
-            if best_route_idx != -1:
+            if best_route_type == 'mcs':
                 target_route = solution.mcs_routes[best_route_idx]
                 target_route.insert_node(best_position, node)
-                # 更新路徑狀態 (因為 incremental_check 不會修改路徑)
                 if self.evaluate_route(target_route):
                     inserted_successfully = True
                 else:
-                    # [Safety] 若插入後導致路徑不可行 (例如 incremental check 漏掉某些約束)，則還原
+                    # 🚨 救命還原機制 (Safety Revert)：拔出節點並重新評估以恢復正常狀態
                     target_route.remove_node(best_position)
-                    self.evaluate_route(target_route) # Restore state
-                    print(f"Warning: Reverted insertion of Node {node.id} to Route {target_route.vehicle_id} (Infeasible after check)")
-            
-            if not inserted_successfully:
-                # 2.3 若無法插入現有路徑，嘗試開啟新 MCS 路徑
-                new_route = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
-                new_route.add_node(node)
-                
-                if self.evaluate_route(new_route):
-                    solution.add_mcs_route(new_route)
+                    self.evaluate_route(target_route)
+                    print(f"Warning: MCS-{best_route_idx} 增量檢查與完整評估不一致，已還原 Node {node.id}")
+                    
+            elif best_route_type == 'uav':
+                target_route = solution.uav_routes[best_route_idx]
+                target_route.insert_node(best_position, node)
+                if self.evaluate_route(target_route):
+                    inserted_successfully = True
                 else:
-                    # 連新開 MCS 都無法服務 (可能太遠或時間窗太緊)
-                    unassigned.append(node)
+                    # 🚨 救命還原機制 (Safety Revert)
+                    target_route.remove_node(best_position)
+                    self.evaluate_route(target_route)
+                    print(f"Warning: UAV-{best_route_idx} 增量檢查與完整評估不一致，已還原 Node {node.id}")
+            
+            # --- 2.4 若無法插入現有路徑，動態開啟新路徑 ---
+            if not inserted_successfully:
+                if node.node_type == 'urgent':
+                    # Urgent 節點：PK 新開 MCS 與新開 UAV 哪個等待時間更短
+                    new_mcs = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
+                    new_mcs.add_node(node)
+                    mcs_feasible = self.evaluate_route(new_mcs)
+                    mcs_cost = new_mcs.total_user_waiting_time if mcs_feasible else float('inf')
+                    
+                    new_uav = Route(vehicle_type='uav', vehicle_id=len(solution.uav_routes))
+                    new_uav.add_node(node)
+                    uav_feasible = self.evaluate_route(new_uav)
+                    uav_cost = new_uav.total_user_waiting_time if uav_feasible else float('inf')
+                    
+                    if not mcs_feasible and not uav_feasible:
+                        unassigned.append(node)
+                    elif uav_cost <= mcs_cost:  # UAV 優先或等待時間較短
+                        solution.add_uav_route(new_uav)
+                    else:
+                        solution.add_mcs_route(new_mcs)
+                else:
+                    # Normal 節點：沒得選，只能乖乖開新 MCS
+                    new_mcs = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
+                    new_mcs.add_node(node)
+                    if self.evaluate_route(new_mcs):
+                        solution.add_mcs_route(new_mcs)
+                    else:
+                        unassigned.append(node) # 真的沒救了，加入未分配清單
         
-        # Step 3: 嘗試用 UAV 服務未分配節點 (MCS 遺漏的)
-        final_unassigned = []
+        # 💡 注意：原本的 Step 3 (UAV 補救) 已經完全被消滅了！
+        # 因為 UAV 已經正式加入正規調度的競爭行列中。
         
-        for node in unassigned:
-            served_by_uav = False
-            
-            # 先嘗試插入現有 UAV 路徑
-            for uav_route in solution.uav_routes:
-                if self.try_insert_node(uav_route, node):
-                    served_by_uav = True
-                    break
-            
-            # 若現有 UAV 無法服務，開新 UAV
-            if not served_by_uav:
-                new_uav_route = Route(vehicle_type='uav', vehicle_id=len(solution.uav_routes))
-                if self.try_insert_node(new_uav_route, node):
-                    solution.add_uav_route(new_uav_route)
-                    served_by_uav = True
-            
-            if not served_by_uav:
-                final_unassigned.append(node)
-                
-        solution.unassigned_nodes = final_unassigned
+        solution.unassigned_nodes = unassigned
         solution.calculate_total_cost(len(customers))
         
         return solution
@@ -1440,40 +1260,11 @@ def main():
     # 輸出參數配置
     problem.print_config()
     
-    # 載入資料 (使用 mixed_instance.csv，節點類型已在 CSV 中定義)
+    # 載入資料
     problem.load_data('instance_25c_random_s42.csv')
     
     # 分配節點類型 (使用 CSV 中的類型定義)
     problem.assign_node_types(use_csv_types=True)
-    
-    # 計算群聚 (僅用於視覺化節點分布)
-    print("Calculating clusters for visualization...")
-    labels, plot_centroids, n_clusters = problem.cluster_customers()
-    
-    # 計算每個群聚的半徑 (最大距離)
-    cluster_radii = []
-    customers = [n for n in problem.nodes if n.node_type != 'depot']
-    
-    for k in range(n_clusters):
-        # 找出屬於該群的索引
-        indices = [i for i, label in enumerate(labels) if label == k]
-        if not indices:
-            cluster_radii.append(0.0)
-            continue
-        
-        # 取得該群所有點的座標
-        points = np.array([[customers[i].x, customers[i].y] for i in indices])
-        centroid = plot_centroids[k]
-        
-        # 計算每個點到中心點的歐幾里得距離
-        dists = np.sqrt(np.sum((points - centroid)**2, axis=1))
-        
-        # 取最大距離作為半徑
-        max_dist = np.max(dists)
-        cluster_radii.append(max_dist)
-    
-    # 繪製節點分布圖
-    problem.plot_nodes(centroids=plot_centroids, cluster_radii=cluster_radii)
     
     # ==================== Parallel Insertion Construction ====================
     print("\n" + "="*80)
