@@ -1313,7 +1313,6 @@ class ALNSSolver:
         self.destroy_ops: Dict[str, Callable] = {
             'random_removal': self._random_removal,
             'worst_removal':  self._worst_removal,
-            'shaw_removal':   self._shaw_removal,
         }
         self.repair_ops: Dict[str, Callable] = {
             'greedy_insertion': self._greedy_insertion,
@@ -1569,112 +1568,6 @@ class ALNSSolver:
         self._cleanup_routes(solution)
         return removed_nodes
     
-    def _shaw_removal(self, solution: Solution, num_remove: int) -> List[Node]:
-        """
-        Shaw Removal (Relatedness-based Removal)
-        
-        移除彼此「相似」的節點群，讓 Repair 有更大的重組空間。
-        相似度 (Relatedness) 定義：
-            R(i, j) = φ₁ × d̂(i,j) + φ₂ × |t_i - t_j|/T_max + φ₃ × |q_i - q_j|/Q_max
-        其中 d̂ 為正規化距離，t 為 ready_time，q 為 demand。
-        R 值越小 → 節點越相似 → 越容易被一起移除。
-        
-        Reference: Ropke & Pisinger (2006), Shaw (1998)
-        """
-        # 1. 收集所有已服務節點 (跨 MCS + UAV)
-        all_served: List[Tuple[Node, str, int, int]] = []  # (node, v_type, r_idx, n_pos)
-        
-        for r_idx, route in enumerate(solution.mcs_routes):
-            for n_pos, node in enumerate(route.nodes):
-                all_served.append((node, 'mcs', r_idx, n_pos))
-        
-        for r_idx, route in enumerate(solution.uav_routes):
-            for n_pos, node in enumerate(route.nodes):
-                all_served.append((node, 'uav', r_idx, n_pos))
-        
-        if not all_served:
-            return []
-        
-        num_remove = min(num_remove, len(all_served))
-        
-        # 2. 預計算正規化所需的最大值 (避免除以零)
-        if len(all_served) > 1:
-            max_dist = max(
-                self.problem.calculate_distance(a[0], b[0], 'euclidean')
-                for i, a in enumerate(all_served)
-                for j, b in enumerate(all_served) if i < j
-            ) or 1.0
-            
-            times = [entry[0].ready_time for entry in all_served]
-            max_time_diff = (max(times) - min(times)) or 1.0
-            
-            demands = [entry[0].demand for entry in all_served]
-            max_demand_diff = (max(demands) - min(demands)) or 1.0
-        else:
-            max_dist = max_time_diff = max_demand_diff = 1.0
-        
-        φ1 = self.cfg.SHAW_WEIGHT_DIST
-        φ2 = self.cfg.SHAW_WEIGHT_TIME
-        φ3 = self.cfg.SHAW_WEIGHT_DEMAND
-        P = self.cfg.SHAW_REMOVAL_P
-        
-        # 3. 隨機選擇 seed 節點
-        seed_idx = random.randint(0, len(all_served) - 1)
-        seed_node = all_served[seed_idx][0]
-        
-        # 標記已選中的索引
-        selected_indices: List[int] = [seed_idx]
-        
-        # 4. 迭代選擇相似節點
-        while len(selected_indices) < num_remove:
-            # 從已選中的節點中隨機挑一個作為參考點
-            ref_node = all_served[random.choice(selected_indices)][0]
-            
-            # 計算所有未選中節點對參考節點的 relatedness
-            candidates: List[Tuple[float, int]] = []  # (relatedness, index)
-            for idx, (node, _, _, _) in enumerate(all_served):
-                if idx in set(selected_indices):
-                    continue
-                
-                dist = self.problem.calculate_distance(ref_node, node, 'euclidean')
-                time_diff = abs(ref_node.ready_time - node.ready_time)
-                demand_diff = abs(ref_node.demand - node.demand)
-                
-                relatedness = (
-                    φ1 * (dist / max_dist) +
-                    φ2 * (time_diff / max_time_diff) +
-                    φ3 * (demand_diff / max_demand_diff)
-                )
-                candidates.append((relatedness, idx))
-            
-            if not candidates:
-                break
-            
-            # 依 relatedness 升序排列 (越相似的在前面)
-            candidates.sort(key=lambda x: x[0])
-            
-            # Shaw 隨機選擇: idx = random^P × len (偏好前面的相似節點)
-            rand_val = random.random()
-            pick_idx = int(rand_val ** P * len(candidates))
-            pick_idx = min(pick_idx, len(candidates) - 1)
-            
-            selected_indices.append(candidates[pick_idx][1])
-        
-        # 5. 從後往前拔，避免 Index Shift
-        entries_to_remove = [all_served[i] for i in selected_indices]
-        entries_to_remove.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
-        
-        removed_nodes: List[Node] = []
-        for node, v_type, r_idx, n_pos in entries_to_remove:
-            if v_type == 'mcs':
-                removed = solution.mcs_routes[r_idx].remove_node(n_pos)
-            else:
-                removed = solution.uav_routes[r_idx].remove_node(n_pos)
-            removed_nodes.append(removed)
-        
-        self._cleanup_routes(solution)
-        return removed_nodes
-    
     def _cleanup_routes(self, solution: Solution):
         """刷新所有路徑狀態並移除空路徑"""
         # 重新評估所有 MCS 路徑
@@ -1914,7 +1807,7 @@ def main():
     problem.print_config()
     
     # 載入資料
-    problem.load_data('instance_100c_random_s42.csv')
+    problem.load_data('instance_25c_random_s42.csv')
     
     # 分配節點類型 (使用 CSV 中的類型定義)
     problem.assign_node_types(use_csv_types=True)
