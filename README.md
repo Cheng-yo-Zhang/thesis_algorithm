@@ -28,7 +28,7 @@ source venv/bin/activate
 ### 3. Install dependencies
 ```bash=
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r packages.txt
 ```
 
 ### 4. Deactivate virtual environment
@@ -45,4 +45,5 @@ rmdir /s venv
 **macOS/Linux:**
 ```bash=
 rm -rf venv
+pipreqs . --force --encoding utf-8 --savepath packages.txt
 ```
