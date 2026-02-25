@@ -1,0 +1,514 @@
+﻿頛 10 ??暺?
+蝭暺???撣? {'depot': 1, 'normal': 8, 'urgent': 2}
+Urgent 蝭暺? 2 ??
+Normal 蝭暺? 8 ??
+================================================================================
+DATA SUMMARY
+================================================================================
+MCS Speed: 0.7200 km/min
+MCS Capacity: 270.0 kWh
+MCS POWER_FAST: 250.0 kW
+MCS POWER_SLOW: 11.0 kW
+Depot: Node 1 at (50.0,50.0), due_date=1440.0
+
+Customer Nodes:
+  ID    X    Y  Demand   Ready     Due SvcTime     Type
+   2   51   92    19.0   413.0   901.0   114.0   normal
+   3   14   71    17.0   406.0   938.0   103.0   normal
+   4   60   20    11.0   418.0   989.0    68.0   normal
+   5   82   86    50.0   531.0  1070.0   292.0   normal
+   6   74   74    13.0   563.0  1086.0    80.0   normal
+   7   87   99    11.0   131.0   618.0    68.0   normal
+   8   23    2    16.0   167.0   724.0    97.0   normal
+   9   21   52    18.0  1073.0  1136.0    10.0   urgent
+  10    1   87    43.0   202.0   687.0   252.0   normal
+  11   29   37    16.0   744.0   807.0     9.0   urgent
+
+================================================================================
+PHASE 0: K-MEANS CLUSTERING
+================================================================================
+
+--- K-Means ???? ---
+  K=2: Silhouette Score = 0.4594
+  K=3: Silhouette Score = 0.4753
+  K=4: Silhouette Score = 0.4184
+  K=5: Silhouette Score = 0.4083
+  K=6: Silhouette Score = 0.3065
+  K=7: Silhouette Score = 0.2357
+  K=8: Silhouette Score = 0.1220
+  K=9: Silhouette Score = 0.0540
+  ???雿?K = 3 (Silhouette = 0.4753)
+  Cluster 0: centroid=(12.0, 70.0), members=[3, 9, 10]
+  Cluster 1: centroid=(73.5, 87.8), members=[2, 5, 6, 7]
+  Cluster 2: centroid=(37.3, 19.7), members=[4, 8, 11]
+
+Customer-Cluster mapping:
+  Node 2 -> Cluster 1
+  Node 3 -> Cluster 0
+  Node 4 -> Cluster 2
+  Node 5 -> Cluster 1
+  Node 6 -> Cluster 1
+  Node 7 -> Cluster 1
+  Node 8 -> Cluster 2
+  Node 9 -> Cluster 0
+  Node 10 -> Cluster 0
+  Node 11 -> Cluster 2
+
+================================================================================
+PHASE 1: CREATE MCS ROUTES (one per cluster)
+================================================================================
+  MCS-0: start_node = centroid (12.0, 70.0)
+    depot->centroid: manhattan_dist=58.00 km, travel_time=80.56 min
+  MCS-1: start_node = centroid (73.5, 87.8)
+    depot->centroid: manhattan_dist=61.25 km, travel_time=85.07 min
+  MCS-2: start_node = centroid (37.3, 19.7)
+    depot->centroid: manhattan_dist=43.00 km, travel_time=59.72 min
+
+================================================================================
+PHASE 2: INSERTION (Urgent-first, then EDD)
+================================================================================
+
+Insertion order (urgent first, then EDD):
+  1. Node 11 (type=urgent, due_date=807.0, ready=744.0)
+  2. Node 9 (type=urgent, due_date=1136.0, ready=1073.0)
+  3. Node 7 (type=normal, due_date=618.0, ready=131.0)
+  4. Node 10 (type=normal, due_date=687.0, ready=202.0)
+  5. Node 8 (type=normal, due_date=724.0, ready=167.0)
+  6. Node 2 (type=normal, due_date=901.0, ready=413.0)
+  7. Node 3 (type=normal, due_date=938.0, ready=406.0)
+  8. Node 4 (type=normal, due_date=989.0, ready=418.0)
+  9. Node 5 (type=normal, due_date=1070.0, ready=531.0)
+  10. Node 6 (type=normal, due_date=1086.0, ready=563.0)
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 1: Insert Node 11 (type=urgent, demand=16.0, ready=744.0, due=807.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 2, home_route_idx = 2
+  Evaluating MCS-2 (home cluster 2)
+    Current nodes: []
+    pos=0: FEASIBLE, delta_cost=35.6481 | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=744.00, actual_dep=744.00, travel=35.65, arrival=779.65, mode=FAST, charge_t=3.84, dep_new=783.49, user_wait=35.65, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: []
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=744.00, actual_dep=744.00, travel=69.44, arrival=813.44 [BLOCKED: arrival(813.44) > due(807.0)]
+  Evaluating MCS-1, current nodes: []
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=744.00, actual_dep=744.00, travel=132.29, arrival=876.29 [BLOCKED: arrival(876.29) > due(807.0)]
+  Evaluating MCS-2, current nodes: []
+    pos=0: FEASIBLE, delta_cost=35.6481 | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=744.00, actual_dep=744.00, travel=35.65, arrival=779.65, mode=FAST, charge_t=3.84, dep_new=783.49, user_wait=35.65, time_shift=N/A(end)
+
+  [2.3] UAV routes (urgent node)
+    No existing UAV routes
+
+  ??DECISION: Insert Node 11 into MCS-2 at position 0, delta_cost=35.6481
+
+  Route states after this step:
+    MCS-2: nodes=[11]
+      arrivals=['779.65']
+      departures=['783.49']
+      user_waits=['35.65']
+      modes=['FAST']
+      total_dist=102.67, total_wait=35.65
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 2: Insert Node 9 (type=urgent, demand=18.0, ready=1073.0, due=1136.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 0, home_route_idx = 0
+  Evaluating MCS-0 (home cluster 0)
+    Current nodes: []
+    pos=0: FEASIBLE, delta_cost=37.5000 | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=1073.00, actual_dep=1073.00, travel=37.50, arrival=1110.50, mode=FAST, charge_t=4.32, dep_new=1114.82, user_wait=37.50, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: []
+    pos=0: FEASIBLE, delta_cost=37.5000 | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=1073.00, actual_dep=1073.00, travel=37.50, arrival=1110.50, mode=FAST, charge_t=4.32, dep_new=1114.82, user_wait=37.50, time_shift=N/A(end)
+  Evaluating MCS-1, current nodes: []
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=1073.00, actual_dep=1073.00, travel=122.57, arrival=1195.57 [BLOCKED: arrival(1195.57) > due(1136.0)]
+  Evaluating MCS-2, current nodes: [11]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=1073.00, actual_dep=1073.00, travel=67.59, arrival=1140.59 [BLOCKED: arrival(1140.59) > due(1136.0)]
+    pos=1: FEASIBLE, delta_cost=31.9444 | prev=Node11, prev_dep=783.49, earliest_dep=1073.00, actual_dep=1073.00, travel=31.94, arrival=1104.94, mode=FAST, charge_t=4.32, dep_new=1109.26, user_wait=31.94, time_shift=N/A(end) *** NEW BEST ***
+
+  [2.3] UAV routes (urgent node)
+    No existing UAV routes
+
+  ??DECISION: Insert Node 9 into MCS-2 at position 1, delta_cost=31.9444
+
+  Route states after this step:
+    MCS-2: nodes=[11, 9]
+      arrivals=['779.65', '1104.94']
+      departures=['783.49', '1109.26']
+      user_waits=['35.65', '31.94']
+      modes=['FAST', 'FAST']
+      total_dist=122.67, total_wait=67.59
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 3: Insert Node 7 (type=normal, demand=11.0, ready=131.0, due=618.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 1, home_route_idx = 1
+  Evaluating MCS-1 (home cluster 1)
+    Current nodes: []
+    pos=0: FEASIBLE, delta_cost=34.3750 | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=131.00, actual_dep=131.00, travel=34.37, arrival=165.38, mode=SLOW, charge_t=60.00, dep_new=225.38, user_wait=34.38, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: []
+    pos=0: FEASIBLE, delta_cost=144.4444 | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=131.00, actual_dep=131.00, travel=144.44, arrival=275.44, mode=SLOW, charge_t=60.00, dep_new=335.44, user_wait=144.44, time_shift=N/A(end)
+  Evaluating MCS-1, current nodes: []
+    pos=0: FEASIBLE, delta_cost=34.3750 | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=131.00, actual_dep=131.00, travel=34.37, arrival=165.38, mode=SLOW, charge_t=60.00, dep_new=225.38, user_wait=34.38, time_shift=N/A(end)
+  Evaluating MCS-2, current nodes: [11, 9]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=131.00, actual_dep=131.00, travel=179.17, arrival=310.17, mode=SLOW, charge_t=60.00, dep_new=370.17, user_wait=179.17, time_shift=131.02
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=783.49, earliest_dep=131.00, actual_dep=783.49, travel=166.67, arrival=950.15 [BLOCKED: arrival(950.15) > due(618.0)]
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=131.00, actual_dep=1109.26, travel=156.94, arrival=1266.21 [BLOCKED: arrival(1266.21) > due(618.0)]
+
+  ??DECISION: Insert Node 7 into MCS-1 at position 0, delta_cost=34.3750
+
+  Route states after this step:
+    MCS-1: nodes=[7]
+      arrivals=['165.38']
+      departures=['225.38']
+      user_waits=['34.38']
+      modes=['SLOW']
+      total_dist=172.00, total_wait=34.38
+    MCS-2: nodes=[11, 9]
+      arrivals=['779.65', '1104.94']
+      departures=['783.49', '1109.26']
+      user_waits=['35.65', '31.94']
+      modes=['FAST', 'FAST']
+      total_dist=122.67, total_wait=67.59
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 4: Insert Node 10 (type=normal, demand=43.0, ready=202.0, due=687.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 0, home_route_idx = 0
+  Evaluating MCS-0 (home cluster 0)
+    Current nodes: []
+    pos=0: FEASIBLE, delta_cost=38.8889 | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=202.00, actual_dep=202.00, travel=38.89, arrival=240.89, mode=SLOW, charge_t=234.55, dep_new=475.43, user_wait=38.89, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: []
+    pos=0: FEASIBLE, delta_cost=38.8889 | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=202.00, actual_dep=202.00, travel=38.89, arrival=240.89, mode=SLOW, charge_t=234.55, dep_new=475.43, user_wait=38.89, time_shift=N/A(end)
+  Evaluating MCS-1, current nodes: [7]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=202.00, actual_dep=202.00, travel=101.74, arrival=303.74, mode=SLOW, charge_t=234.55, dep_new=538.28, user_wait=101.74, time_shift=509.02
+    pos=1: FEASIBLE, delta_cost=159.4861 | prev=Node7, prev_dep=225.38, earliest_dep=202.00, actual_dep=225.38, travel=136.11, arrival=361.49, mode=SLOW, charge_t=234.55, dep_new=596.03, user_wait=159.49, time_shift=N/A(end)
+  Evaluating MCS-2, current nodes: [11, 9]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=202.00, actual_dep=202.00, travel=143.98, arrival=345.98, mode=SLOW, charge_t=234.55, dep_new=580.53, user_wait=143.98, time_shift=72.69
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=783.49, earliest_dep=202.00, actual_dep=783.49, travel=108.33, arrival=891.82 [BLOCKED: arrival(891.82) > due(687.0)]
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=202.00, actual_dep=1109.26, travel=76.39, arrival=1185.65 [BLOCKED: arrival(1185.65) > due(687.0)]
+
+  ??DECISION: Insert Node 10 into MCS-0 at position 0, delta_cost=38.8889
+
+  Route states after this step:
+    MCS-0: nodes=[10]
+      arrivals=['240.89']
+      departures=['475.43']
+      user_waits=['38.89']
+      modes=['SLOW']
+      total_dist=172.00, total_wait=38.89
+    MCS-1: nodes=[7]
+      arrivals=['165.38']
+      departures=['225.38']
+      user_waits=['34.38']
+      modes=['SLOW']
+      total_dist=172.00, total_wait=34.38
+    MCS-2: nodes=[11, 9]
+      arrivals=['779.65', '1104.94']
+      departures=['783.49', '1109.26']
+      user_waits=['35.65', '31.94']
+      modes=['FAST', 'FAST']
+      total_dist=122.67, total_wait=67.59
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 5: Insert Node 8 (type=normal, demand=16.0, ready=167.0, due=724.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 2, home_route_idx = 2
+  Evaluating MCS-2 (home cluster 2)
+    Current nodes: [11, 9]
+    pos=0: FEASIBLE, delta_cost=65.7407 | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=167.00, actual_dep=167.00, travel=44.44, arrival=211.44, mode=SLOW, charge_t=87.27, dep_new=298.72, user_wait=44.44, time_shift=21.30
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=783.49, earliest_dep=167.00, actual_dep=783.49, travel=56.94, arrival=840.43 [BLOCKED: arrival(840.43) > due(724.0)]
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=167.00, actual_dep=1109.26, travel=72.22, arrival=1181.49 [BLOCKED: arrival(1181.49) > due(724.0)]
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: [10]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=167.00, actual_dep=167.00, travel=109.72, arrival=276.72, mode=SLOW, charge_t=87.27, dep_new=363.99, user_wait=109.72, time_shift=271.72
+    pos=1: FEASIBLE, delta_cost=457.0455 | prev=Node10, prev_dep=475.43, earliest_dep=167.00, actual_dep=475.43, travel=148.61, arrival=624.05, mode=SLOW, charge_t=87.27, dep_new=711.32, user_wait=457.05, time_shift=N/A(end)
+  Evaluating MCS-1, current nodes: [7]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=167.00, actual_dep=167.00, travel=189.24, arrival=356.24, mode=SLOW, charge_t=87.27, dep_new=443.51, user_wait=189.24, time_shift=501.74
+    pos=1: FEASIBLE, delta_cost=281.9861 | prev=Node7, prev_dep=225.38, earliest_dep=167.00, actual_dep=225.38, travel=223.61, arrival=448.99, mode=SLOW, charge_t=87.27, dep_new=536.26, user_wait=281.99, time_shift=N/A(end)
+  Evaluating MCS-2, current nodes: [11, 9]
+    pos=0: FEASIBLE, delta_cost=65.7407 | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=167.00, actual_dep=167.00, travel=44.44, arrival=211.44, mode=SLOW, charge_t=87.27, dep_new=298.72, user_wait=44.44, time_shift=21.30
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=783.49, earliest_dep=167.00, actual_dep=783.49, travel=56.94, arrival=840.43 [BLOCKED: arrival(840.43) > due(724.0)]
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=167.00, actual_dep=1109.26, travel=72.22, arrival=1181.49 [BLOCKED: arrival(1181.49) > due(724.0)]
+
+  ??DECISION: Insert Node 8 into MCS-2 at position 0, delta_cost=65.7407
+
+  Route states after this step:
+    MCS-0: nodes=[10]
+      arrivals=['240.89']
+      departures=['475.43']
+      user_waits=['38.89']
+      modes=['SLOW']
+      total_dist=172.00, total_wait=38.89
+    MCS-1: nodes=[7]
+      arrivals=['165.38']
+      departures=['225.38']
+      user_waits=['34.38']
+      modes=['SLOW']
+      total_dist=172.00, total_wait=34.38
+    MCS-2: nodes=[8, 11, 9]
+      arrivals=['211.44', '800.94', '1104.94']
+      departures=['298.72', '804.78', '1109.26']
+      user_waits=['44.44', '56.94', '31.94']
+      modes=['SLOW', 'FAST', 'FAST']
+      total_dist=170.00, total_wait=133.33
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 6: Insert Node 2 (type=normal, demand=19.0, ready=413.0, due=901.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 1, home_route_idx = 1
+  Evaluating MCS-1 (home cluster 1)
+    Current nodes: [7]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=413.00, actual_dep=413.00, travel=37.15, arrival=450.15, mode=SLOW, charge_t=103.64, dep_new=553.79, user_wait=37.15, time_shift=448.14
+    pos=1: FEASIBLE, delta_cost=59.7222 | prev=Node7, prev_dep=225.38, earliest_dep=413.00, actual_dep=413.00, travel=59.72, arrival=472.72, mode=SLOW, charge_t=103.64, dep_new=576.36, user_wait=59.72, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: [10]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=413.00, actual_dep=413.00, travel=84.72, arrival=497.72, mode=SLOW, charge_t=103.64, dep_new=601.36, user_wait=84.72, time_shift=436.86
+    pos=1: FEASIBLE, delta_cost=138.8232 | prev=Node10, prev_dep=475.43, earliest_dep=413.00, actual_dep=475.43, travel=76.39, arrival=551.82, mode=SLOW, charge_t=103.64, dep_new=655.46, user_wait=138.82, time_shift=N/A(end)
+  Evaluating MCS-1, current nodes: [7]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=413.00, actual_dep=413.00, travel=37.15, arrival=450.15, mode=SLOW, charge_t=103.64, dep_new=553.79, user_wait=37.15, time_shift=448.14
+    pos=1: FEASIBLE, delta_cost=59.7222 | prev=Node7, prev_dep=225.38, earliest_dep=413.00, actual_dep=413.00, travel=59.72, arrival=472.72, mode=SLOW, charge_t=103.64, dep_new=576.36, user_wait=59.72, time_shift=N/A(end)
+  Evaluating MCS-2, current nodes: [8, 11, 9]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=413.00, actual_dep=413.00, travel=119.44, arrival=532.44, mode=SLOW, charge_t=103.64, dep_new=636.08, user_wait=119.44, time_shift=588.53
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node8, prev_dep=298.72, earliest_dep=413.00, actual_dep=413.00, travel=163.89, arrival=576.89, mode=SLOW, charge_t=103.64, dep_new=680.53, user_wait=163.89, time_shift=50.00
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=804.78, earliest_dep=413.00, actual_dep=804.78, travel=106.94, arrival=911.73 [BLOCKED: arrival(911.73) > due(901.0)]
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=413.00, actual_dep=1109.26, travel=97.22, arrival=1206.49 [BLOCKED: arrival(1206.49) > due(901.0)]
+
+  ??DECISION: Insert Node 2 into MCS-1 at position 1, delta_cost=59.7222
+
+  Route states after this step:
+    MCS-0: nodes=[10]
+      arrivals=['240.89']
+      departures=['475.43']
+      user_waits=['38.89']
+      modes=['SLOW']
+      total_dist=172.00, total_wait=38.89
+    MCS-1: nodes=[7, 2]
+      arrivals=['165.38', '472.72']
+      departures=['225.38', '576.36']
+      user_waits=['34.38', '59.72']
+      modes=['SLOW', 'SLOW']
+      total_dist=172.00, total_wait=94.10
+    MCS-2: nodes=[8, 11, 9]
+      arrivals=['211.44', '800.94', '1104.94']
+      departures=['298.72', '804.78', '1109.26']
+      user_waits=['44.44', '56.94', '31.94']
+      modes=['SLOW', 'FAST', 'FAST']
+      total_dist=170.00, total_wait=133.33
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 7: Insert Node 3 (type=normal, demand=17.0, ready=406.0, due=938.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 0, home_route_idx = 0
+  Evaluating MCS-0 (home cluster 0)
+    Current nodes: [10]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=406.00, actual_dep=406.00, travel=4.17, arrival=410.17, mode=SLOW, charge_t=92.73, dep_new=502.89, user_wait=4.17, time_shift=302.28
+    pos=1: FEASIBLE, delta_cost=109.7121 | prev=Node10, prev_dep=475.43, earliest_dep=406.00, actual_dep=475.43, travel=40.28, arrival=515.71, mode=SLOW, charge_t=92.73, dep_new=608.44, user_wait=109.71, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: [10]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=406.00, actual_dep=406.00, travel=4.17, arrival=410.17, mode=SLOW, charge_t=92.73, dep_new=502.89, user_wait=4.17, time_shift=302.28
+    pos=1: FEASIBLE, delta_cost=109.7121 | prev=Node10, prev_dep=475.43, earliest_dep=406.00, actual_dep=475.43, travel=40.28, arrival=515.71, mode=SLOW, charge_t=92.73, dep_new=608.44, user_wait=109.71, time_shift=N/A(end)
+  Evaluating MCS-1, current nodes: [7, 2]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=406.00, actual_dep=406.00, travel=105.90, arrival=511.90, mode=SLOW, charge_t=92.73, dep_new=604.63, user_wait=105.90, time_shift=579.53
+    pos=1: FEASIBLE, delta_cost=387.1162 | prev=Node7, prev_dep=225.38, earliest_dep=406.00, actual_dep=406.00, travel=140.28, arrival=546.28, mode=SLOW, charge_t=92.73, dep_new=639.01, user_wait=140.28, time_shift=246.84
+    pos=2: FEASIBLE, delta_cost=250.9141 | prev=Node2, prev_dep=576.36, earliest_dep=406.00, actual_dep=576.36, travel=80.56, arrival=656.91, mode=SLOW, charge_t=92.73, dep_new=749.64, user_wait=250.91, time_shift=N/A(end)
+  Evaluating MCS-2, current nodes: [8, 11, 9]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=406.00, actual_dep=406.00, travel=103.70, arrival=509.70, mode=SLOW, charge_t=92.73, dep_new=602.43, user_wait=103.70, time_shift=499.32
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node8, prev_dep=298.72, earliest_dep=406.00, actual_dep=406.00, travel=108.33, arrival=514.33, mode=SLOW, charge_t=92.73, dep_new=607.06, user_wait=108.33, time_shift=11.11
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=804.78, earliest_dep=406.00, actual_dep=804.78, travel=68.06, arrival=872.84 [BLOCKED: departure(965.57) > due(938.0), mode=SLOW, charge_time=92.73]
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=406.00, actual_dep=1109.26, travel=36.11, arrival=1145.38 [BLOCKED: arrival(1145.38) > due(938.0)]
+
+  ??DECISION: Insert Node 3 into MCS-0 at position 1, delta_cost=109.7121
+
+  Route states after this step:
+    MCS-0: nodes=[10, 3]
+      arrivals=['240.89', '515.71']
+      departures=['475.43', '608.44']
+      user_waits=['38.89', '109.71']
+      modes=['SLOW', 'SLOW']
+      total_dist=172.00, total_wait=148.60
+    MCS-1: nodes=[7, 2]
+      arrivals=['165.38', '472.72']
+      departures=['225.38', '576.36']
+      user_waits=['34.38', '59.72']
+      modes=['SLOW', 'SLOW']
+      total_dist=172.00, total_wait=94.10
+    MCS-2: nodes=[8, 11, 9]
+      arrivals=['211.44', '800.94', '1104.94']
+      departures=['298.72', '804.78', '1109.26']
+      user_waits=['44.44', '56.94', '31.94']
+      modes=['SLOW', 'FAST', 'FAST']
+      total_dist=170.00, total_wait=133.33
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 8: Insert Node 4 (type=normal, demand=11.0, ready=418.0, due=989.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 2, home_route_idx = 2
+  Evaluating MCS-2 (home cluster 2)
+    Current nodes: [8, 11, 9]
+    pos=0: FEASIBLE, delta_cost=406.8333 | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=418.00, actual_dep=418.00, travel=31.94, arrival=449.94, mode=SLOW, charge_t=60.00, dep_new=509.94, user_wait=31.94, time_shift=374.89
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node8, prev_dep=298.72, earliest_dep=418.00, actual_dep=418.00, travel=76.39, arrival=494.39, mode=SLOW, charge_t=60.00, dep_new=554.39, user_wait=76.39, time_shift=9.72
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=804.78, earliest_dep=418.00, actual_dep=804.78, travel=66.67, arrival=871.45, mode=SLOW, charge_t=60.00, dep_new=931.45, user_wait=453.45, time_shift=66.67
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=418.00, actual_dep=1109.26, travel=98.61, arrival=1207.88 [BLOCKED: arrival(1207.88) > due(989.0)]
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: [10, 3]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=418.00, actual_dep=418.00, travel=136.11, arrival=554.11, mode=SLOW, charge_t=60.00, dep_new=614.11, user_wait=136.11, time_shift=548.22
+    pos=1: FEASIBLE, delta_cost=561.8788 | prev=Node10, prev_dep=475.43, earliest_dep=418.00, actual_dep=475.43, travel=175.00, arrival=650.43, mode=SLOW, charge_t=60.00, dep_new=710.43, user_wait=232.43, time_shift=329.44
+    pos=2: FEASIBLE, delta_cost=325.1616 | prev=Node3, prev_dep=608.44, earliest_dep=418.00, actual_dep=608.44, travel=134.72, arrival=743.16, mode=SLOW, charge_t=60.00, dep_new=803.16, user_wait=325.16, time_shift=N/A(end) *** NEW BEST ***
+  Evaluating MCS-1, current nodes: [7, 2]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=418.00, actual_dep=418.00, travel=112.85, arrival=530.85, mode=SLOW, charge_t=60.00, dep_new=590.85, user_wait=112.85, time_shift=572.69
+    pos=1: FEASIBLE, delta_cost=412.2222 | prev=Node7, prev_dep=225.38, earliest_dep=418.00, actual_dep=418.00, travel=147.22, arrival=565.22, mode=SLOW, charge_t=60.00, dep_new=625.22, user_wait=147.22, time_shift=265.00
+    pos=2: FEASIBLE, delta_cost=270.8586 | prev=Node2, prev_dep=576.36, earliest_dep=418.00, actual_dep=576.36, travel=112.50, arrival=688.86, mode=SLOW, charge_t=60.00, dep_new=748.86, user_wait=270.86, time_shift=N/A(end) *** NEW BEST ***
+  Evaluating MCS-2, current nodes: [8, 11, 9]
+    pos=0: FEASIBLE, delta_cost=406.8333 | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=418.00, actual_dep=418.00, travel=31.94, arrival=449.94, mode=SLOW, charge_t=60.00, dep_new=509.94, user_wait=31.94, time_shift=374.89
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node8, prev_dep=298.72, earliest_dep=418.00, actual_dep=418.00, travel=76.39, arrival=494.39, mode=SLOW, charge_t=60.00, dep_new=554.39, user_wait=76.39, time_shift=9.72
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=804.78, earliest_dep=418.00, actual_dep=804.78, travel=66.67, arrival=871.45, mode=SLOW, charge_t=60.00, dep_new=931.45, user_wait=453.45, time_shift=66.67
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=418.00, actual_dep=1109.26, travel=98.61, arrival=1207.88 [BLOCKED: arrival(1207.88) > due(989.0)]
+
+  ??DECISION: Insert Node 4 into MCS-1 at position 2, delta_cost=270.8586
+
+  Route states after this step:
+    MCS-0: nodes=[10, 3]
+      arrivals=['240.89', '515.71']
+      departures=['475.43', '608.44']
+      user_waits=['38.89', '109.71']
+      modes=['SLOW', 'SLOW']
+      total_dist=172.00, total_wait=148.60
+    MCS-1: nodes=[7, 2, 4]
+      arrivals=['165.38', '472.72', '688.86']
+      departures=['225.38', '576.36', '748.86']
+      user_waits=['34.38', '59.72', '270.86']
+      modes=['SLOW', 'SLOW', 'SLOW']
+      total_dist=250.00, total_wait=364.96
+    MCS-2: nodes=[8, 11, 9]
+      arrivals=['211.44', '800.94', '1104.94']
+      departures=['298.72', '804.78', '1109.26']
+      user_waits=['44.44', '56.94', '31.94']
+      modes=['SLOW', 'FAST', 'FAST']
+      total_dist=170.00, total_wait=133.33
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 9: Insert Node 5 (type=normal, demand=50.0, ready=531.0, due=1070.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 1, home_route_idx = 1
+  Evaluating MCS-1 (home cluster 1)
+    Current nodes: [7, 2, 4]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=531.00, actual_dep=531.00, travel=14.24, arrival=545.24, mode=SLOW, charge_t=272.73, dep_new=817.96, user_wait=14.24, time_shift=677.59
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node7, prev_dep=225.38, earliest_dep=531.00, actual_dep=531.00, travel=25.00, arrival=556.00, mode=SLOW, charge_t=272.73, dep_new=828.73, user_wait=25.00, time_shift=407.39
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node2, prev_dep=576.36, earliest_dep=531.00, actual_dep=576.36, travel=51.39, arrival=627.75, mode=SLOW, charge_t=272.73, dep_new=900.47, user_wait=96.75, time_shift=333.84
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node4, prev_dep=748.86, earliest_dep=531.00, actual_dep=748.86, travel=122.22, arrival=871.08 [BLOCKED: departure(1143.81) > due(1070.0), mode=SLOW, charge_time=272.73]
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: [10, 3]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=531.00, actual_dep=531.00, travel=119.44, arrival=650.44, mode=SLOW, charge_t=272.73, dep_new=923.17, user_wait=119.44, time_shift=796.17
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node10, prev_dep=475.43, earliest_dep=531.00, actual_dep=531.00, travel=113.89, arrival=644.89, mode=SLOW, charge_t=272.73, dep_new=917.62, user_wait=113.89, time_shift=517.18
+    pos=2: FEASIBLE, delta_cost=192.7172 | prev=Node3, prev_dep=608.44, earliest_dep=531.00, actual_dep=608.44, travel=115.28, arrival=723.72, mode=SLOW, charge_t=272.73, dep_new=996.44, user_wait=192.72, time_shift=N/A(end) *** NEW BEST ***
+  Evaluating MCS-1, current nodes: [7, 2, 4]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=531.00, actual_dep=531.00, travel=14.24, arrival=545.24, mode=SLOW, charge_t=272.73, dep_new=817.96, user_wait=14.24, time_shift=677.59
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node7, prev_dep=225.38, earliest_dep=531.00, actual_dep=531.00, travel=25.00, arrival=556.00, mode=SLOW, charge_t=272.73, dep_new=828.73, user_wait=25.00, time_shift=407.39
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node2, prev_dep=576.36, earliest_dep=531.00, actual_dep=576.36, travel=51.39, arrival=627.75, mode=SLOW, charge_t=272.73, dep_new=900.47, user_wait=96.75, time_shift=333.84
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node4, prev_dep=748.86, earliest_dep=531.00, actual_dep=748.86, travel=122.22, arrival=871.08 [BLOCKED: departure(1143.81) > due(1070.0), mode=SLOW, charge_time=272.73]
+  Evaluating MCS-2, current nodes: [8, 11, 9]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=531.00, actual_dep=531.00, travel=154.17, arrival=685.17, mode=SLOW, charge_t=272.73, dep_new=957.89, user_wait=154.17, time_shift=945.06
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node8, prev_dep=298.72, earliest_dep=531.00, actual_dep=531.00, travel=198.61, arrival=729.61, mode=SLOW, charge_t=272.73, dep_new=1002.34, user_wait=198.61, time_shift=343.06
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=804.78, earliest_dep=531.00, actual_dep=804.78, travel=141.67, arrival=946.45 [BLOCKED: departure(1219.18) > due(1070.0), mode=SLOW, charge_time=272.73]
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=531.00, actual_dep=1109.26, travel=131.94, arrival=1241.21 [BLOCKED: arrival(1241.21) > due(1070.0)]
+
+  ??DECISION: Insert Node 5 into MCS-0 at position 2, delta_cost=192.7172
+
+  Route states after this step:
+    MCS-0: nodes=[10, 3, 5]
+      arrivals=['240.89', '515.71', '723.72']
+      departures=['475.43', '608.44', '996.44']
+      user_waits=['38.89', '109.71', '192.72']
+      modes=['SLOW', 'SLOW', 'SLOW']
+      total_dist=266.00, total_wait=341.32
+    MCS-1: nodes=[7, 2, 4]
+      arrivals=['165.38', '472.72', '688.86']
+      departures=['225.38', '576.36', '748.86']
+      user_waits=['34.38', '59.72', '270.86']
+      modes=['SLOW', 'SLOW', 'SLOW']
+      total_dist=250.00, total_wait=364.96
+    MCS-2: nodes=[8, 11, 9]
+      arrivals=['211.44', '800.94', '1104.94']
+      departures=['298.72', '804.78', '1109.26']
+      user_waits=['44.44', '56.94', '31.94']
+      modes=['SLOW', 'FAST', 'FAST']
+      total_dist=170.00, total_wait=133.33
+
+????????????????????????????????????????????????????????????????????????????????
+STEP 10: Insert Node 6 (type=normal, demand=13.0, ready=563.0, due=1086.0)
+????????????????????????????????????????????????????????????????????????????????
+
+  [2.1] Home cluster = 1, home_route_idx = 1
+  Evaluating MCS-1 (home cluster 1)
+    Current nodes: [7, 2, 4]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=563.00, actual_dep=563.00, travel=19.79, arrival=582.79, mode=SLOW, charge_t=70.91, dep_new=653.70, user_wait=19.79, time_shift=541.10
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node7, prev_dep=225.38, earliest_dep=563.00, actual_dep=563.00, travel=52.78, arrival=615.78, mode=SLOW, charge_t=70.91, dep_new=686.69, user_wait=52.78, time_shift=270.91
+    pos=2: FEASIBLE, delta_cost=180.1010 | prev=Node2, prev_dep=576.36, earliest_dep=563.00, actual_dep=576.36, travel=56.94, arrival=633.30, mode=SLOW, charge_t=70.91, dep_new=704.21, user_wait=70.30, time_shift=109.80
+    pos=3: FEASIBLE, delta_cost=280.3030 | prev=Node4, prev_dep=748.86, earliest_dep=563.00, actual_dep=748.86, travel=94.44, arrival=843.30, mode=SLOW, charge_t=70.91, dep_new=914.21, user_wait=280.30, time_shift=N/A(end)
+
+  [2.2] Cross-cluster: evaluate ALL MCS routes
+  Evaluating MCS-0, current nodes: [10, 3, 5]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(12.0,70.0), prev_dep=80.56, earliest_dep=563.00, actual_dep=563.00, travel=91.67, arrival=654.67, mode=SLOW, charge_t=70.91, dep_new=725.58, user_wait=91.67, time_shift=604.13
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node10, prev_dep=475.43, earliest_dep=563.00, actual_dep=563.00, travel=119.44, arrival=682.44, mode=SLOW, charge_t=70.91, dep_new=753.35, user_wait=119.44, time_shift=325.14
+    pos=2: FEASIBLE, delta_cost=203.8485 | prev=Node3, prev_dep=608.44, earliest_dep=563.00, actual_dep=608.44, travel=87.50, arrival=695.94, mode=SLOW, charge_t=70.91, dep_new=766.85, user_wait=132.94, time_shift=70.91
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node5, prev_dep=996.44, earliest_dep=563.00, actual_dep=996.44, travel=27.78, arrival=1024.22 [BLOCKED: departure(1095.13) > due(1086.0), mode=SLOW, charge_time=70.91]
+  Evaluating MCS-1, current nodes: [7, 2, 4]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(73.5,87.8), prev_dep=85.07, earliest_dep=563.00, actual_dep=563.00, travel=19.79, arrival=582.79, mode=SLOW, charge_t=70.91, dep_new=653.70, user_wait=19.79, time_shift=541.10
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node7, prev_dep=225.38, earliest_dep=563.00, actual_dep=563.00, travel=52.78, arrival=615.78, mode=SLOW, charge_t=70.91, dep_new=686.69, user_wait=52.78, time_shift=270.91
+    pos=2: FEASIBLE, delta_cost=180.1010 | prev=Node2, prev_dep=576.36, earliest_dep=563.00, actual_dep=576.36, travel=56.94, arrival=633.30, mode=SLOW, charge_t=70.91, dep_new=704.21, user_wait=70.30, time_shift=109.80
+    pos=3: FEASIBLE, delta_cost=280.3030 | prev=Node4, prev_dep=748.86, earliest_dep=563.00, actual_dep=748.86, travel=94.44, arrival=843.30, mode=SLOW, charge_t=70.91, dep_new=914.21, user_wait=280.30, time_shift=N/A(end)
+  Evaluating MCS-2, current nodes: [8, 11, 9]
+    pos=0: INFEASIBLE, delta_cost=inf | prev=centroid(37.3,19.7), prev_dep=59.72, earliest_dep=563.00, actual_dep=563.00, travel=126.39, arrival=689.39, mode=SLOW, charge_t=70.91, dep_new=760.30, user_wait=126.39, time_shift=719.69
+    pos=1: INFEASIBLE, delta_cost=inf | prev=Node8, prev_dep=298.72, earliest_dep=563.00, actual_dep=563.00, travel=170.83, arrival=733.83, mode=SLOW, charge_t=70.91, dep_new=804.74, user_wait=170.83, time_shift=117.69
+    pos=2: INFEASIBLE, delta_cost=inf | prev=Node11, prev_dep=804.78, earliest_dep=563.00, actual_dep=804.78, travel=113.89, arrival=918.67, mode=SLOW, charge_t=70.91, dep_new=989.58, user_wait=355.67, time_shift=72.22
+    pos=3: INFEASIBLE, delta_cost=inf | prev=Node9, prev_dep=1109.26, earliest_dep=563.00, actual_dep=1109.26, travel=104.17, arrival=1213.43 [BLOCKED: arrival(1213.43) > due(1086.0)]
+
+  ??DECISION: Insert Node 6 into MCS-1 at position 2, delta_cost=180.1010
+
+  Route states after this step:
+    MCS-0: nodes=[10, 3, 5]
+      arrivals=['240.89', '515.71', '723.72']
+      departures=['475.43', '608.44', '996.44']
+      user_waits=['38.89', '109.71', '192.72']
+      modes=['SLOW', 'SLOW', 'SLOW']
+      total_dist=266.00, total_wait=341.32
+    MCS-1: nodes=[7, 2, 6, 4]
+      arrivals=['165.38', '472.72', '633.30', '798.66']
+      departures=['225.38', '576.36', '704.21', '858.66']
+      user_waits=['34.38', '59.72', '70.30', '380.66']
+      modes=['SLOW', 'SLOW', 'SLOW', 'SLOW']
+      total_dist=278.00, total_wait=545.06
+    MCS-2: nodes=[8, 11, 9]
+      arrivals=['211.44', '800.94', '1104.94']
+      departures=['298.72', '804.78', '1109.26']
+      user_waits=['44.44', '56.94', '31.94']
+      modes=['SLOW', 'FAST', 'FAST']
+      total_dist=170.00, total_wait=133.33
+
+================================================================================
+FINAL SOLUTION SUMMARY
+================================================================================
+MCS-0: nodes=[10, 3, 5], total_dist=266.00km, total_wait=341.32min, modes=['SLOW', 'SLOW', 'SLOW']
+MCS-1: nodes=[7, 2, 6, 4], total_dist=278.00km, total_wait=545.06min, modes=['SLOW', 'SLOW', 'SLOW', 'SLOW']
+MCS-2: nodes=[8, 11, 9], total_dist=170.00km, total_wait=133.33min, modes=['SLOW', 'FAST', 'FAST']
+Unassigned: []
+Total cost: 109.1108

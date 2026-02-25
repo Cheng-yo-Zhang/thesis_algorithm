@@ -221,58 +221,52 @@ class ALNSSolver:
     
     def _worst_removal(self, solution: Solution, num_remove: int) -> List[Node]:
         """
-        Worst Removal: 移除「成本貢獻最高」的節點
-        
-        成本貢獻 = 該節點的用戶等待時間 (user_waiting_time)
-        使用隨機性參數 p 控制選擇的確定性
-        
-        Returns:
-            被移除的節點列表
+        Worst Removal: 移除「成本貢獻最高」的節點 (包含 MCS 與 UAV)
         """
-        # 收集所有節點的成本貢獻
-        node_costs: List[Tuple[float, int, int]] = []  # (cost, route_idx, node_pos)
-        for r_idx, route in enumerate(solution.mcs_routes):
-            for n_pos, node in enumerate(route.nodes):
-                if n_pos < len(route.user_waiting_times):
-                    cost = route.user_waiting_times[n_pos]
-                else:
-                    cost = 0.0
-                node_costs.append((cost, r_idx, n_pos))
+        # 1. 收集所有節點的成本貢獻 (cost, vehicle_type, route_idx, node_pos)
+        node_costs: List[Tuple[float, str, int, int]] = []
+        
+        for v_type, routes in [('mcs', solution.mcs_routes), ('uav', solution.uav_routes)]:
+            for r_idx, route in enumerate(routes):
+                for n_pos, node in enumerate(route.nodes):
+                    if n_pos < len(route.user_waiting_times):
+                        cost = route.user_waiting_times[n_pos]
+                    else:
+                        cost = 0.0
+                    node_costs.append((cost, v_type, r_idx, n_pos))
         
         if not node_costs:
             return []
+            
+        # 2. 按成本降序排列 (最糟的在最前面)
+        node_costs.sort(key=lambda x: x[0], reverse=True)
         
-        removed_nodes: List[Node] = []
+        # 3. 挑出要移除的候選人
+        selected_to_remove = []
         num_remove = min(num_remove, len(node_costs))
         
         for _ in range(num_remove):
             if not node_costs:
                 break
-            
-            # 按成本降序排列
-            node_costs.sort(key=lambda x: x[0], reverse=True)
-            
-            # Shaw's stochastic selection: index = floor(random^p * len)
+            # Shaw's stochastic selection
             rand_val = random.random()
             idx = int(rand_val ** self.cfg.WORST_REMOVAL_P * len(node_costs))
             idx = min(idx, len(node_costs) - 1)
+            selected_to_remove.append(node_costs.pop(idx))
             
-            cost, r_idx, n_pos = node_costs.pop(idx)
-            node = solution.mcs_routes[r_idx].remove_node(n_pos)
+        # 🚨 4. 關鍵防呆：從後往前拔，避免 Index Shift 導致拔錯節點！
+        # 排序條件：先按 vehicle_type, 再按 route_idx, 最後按 n_pos (降序)
+        selected_to_remove.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
+        
+        removed_nodes: List[Node] = []
+        for cost, v_type, r_idx, n_pos in selected_to_remove:
+            if v_type == 'mcs':
+                node = solution.mcs_routes[r_idx].remove_node(n_pos)
+            else:
+                node = solution.uav_routes[r_idx].remove_node(n_pos)
             removed_nodes.append(node)
             
-            # 重新整理索引：同路徑中在 n_pos 之後的位置需要 -1
-            updated = []
-            for c, ri, np_ in node_costs:
-                if ri == r_idx and np_ > n_pos:
-                    updated.append((c, ri, np_ - 1))
-                else:
-                    updated.append((c, ri, np_))
-            node_costs = updated
-        
-        # 刷新受影響路徑 & 移除空路徑
         self._cleanup_routes(solution)
-        
         return removed_nodes
     
     def _cleanup_routes(self, solution: Solution):
@@ -305,11 +299,11 @@ class ALNSSolver:
         使用 incremental_insertion_check 評估。
         """
         # 按 due_date (EDD) 排序，Urgent 優先
-        removed_nodes.sort(key=lambda n: (0 if n.node_type == 'urgent' else 1, n.due_date))
-        
+        pool = removed_nodes + solution.unassigned_nodes
+        pool.sort(key=lambda n: (0 if n.node_type == 'urgent' else 1, n.due_date))
         still_unassigned: List[Node] = []
         
-        for node in removed_nodes:
+        for node in pool:
             best_route_type: Optional[str] = None  # 'mcs' or 'uav' or None
             best_route_idx = -1
             best_position = -1
@@ -336,21 +330,56 @@ class ALNSSolver:
                             best_route_idx = r_idx
                             best_position = pos
             
+            # 執行插入或動態開車
             if best_route_type == 'mcs':
                 route = solution.mcs_routes[best_route_idx]
                 route.insert_node(best_position, node)
-                self.problem.evaluate_route(route)
+                if not self.problem.evaluate_route(route):
+                    route.remove_node(best_position)
+                    self.problem.evaluate_route(route)
+                    still_unassigned.append(node)      # 宣告失敗，丟回未分配
+                
             elif best_route_type == 'uav':
                 route = solution.uav_routes[best_route_idx]
                 route.insert_node(best_position, node)
-                self.problem.evaluate_route(route)
+                if not self.problem.evaluate_route(route):
+                    route.remove_node(best_position)
+                    self.problem.evaluate_route(route)
+                    still_unassigned.append(node)
             else:
-                # 無法插入現有路徑 → 開新 MCS
-                new_route = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
-                new_route.add_node(node)
-                if self.problem.evaluate_route(new_route):
-                    solution.add_mcs_route(new_route)
+                # 無法插入現有路徑 → 動態開新車 (支援 UAV 救援)
+                inserted = False
+                if node.node_type == 'urgent':
+                    # Urgent 節點：PK 新開 MCS 與新開 UAV
+                    nearest_centroid = self.problem._find_nearest_centroid(node)
+                    new_mcs = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
+                    new_mcs.start_node = nearest_centroid
+                    new_mcs.add_node(node)
+                    mcs_feasible = self.problem.evaluate_route(new_mcs)
+                    mcs_cost = new_mcs.total_user_waiting_time if mcs_feasible else float('inf')
+                    
+                    new_uav = Route(vehicle_type='uav', vehicle_id=len(solution.uav_routes))
+                    new_uav.add_node(node)
+                    uav_feasible = self.problem.evaluate_route(new_uav)
+                    uav_cost = new_uav.total_user_waiting_time if uav_feasible else float('inf')
+                    
+                    if mcs_feasible or uav_feasible:
+                        if uav_cost <= mcs_cost:
+                            solution.add_uav_route(new_uav)
+                        else:
+                            solution.add_mcs_route(new_mcs)
+                        inserted = True
                 else:
+                    # Normal 節點：只能開新 MCS
+                    nearest_centroid = self.problem._find_nearest_centroid(node)
+                    new_mcs = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
+                    new_mcs.start_node = nearest_centroid
+                    new_mcs.add_node(node)
+                    if self.problem.evaluate_route(new_mcs):
+                        solution.add_mcs_route(new_mcs)
+                        inserted = True
+                        
+                if not inserted:
                     still_unassigned.append(node)
         
         solution.unassigned_nodes = still_unassigned
@@ -362,7 +391,7 @@ class ALNSSolver:
         regret = best2_cost - best1_cost
         直覺：若某節點只有一個好位置，不優先處理的話後面就插不進去了。
         """
-        pool = list(removed_nodes)  # 待插入節點池
+        pool = removed_nodes + solution.unassigned_nodes
         still_unassigned: List[Node] = []
         
         while pool:
@@ -420,14 +449,40 @@ class ALNSSolver:
                     best_insert_cost = best1_cost
             
             if best_node is None:
-                # 剩餘節點都無法插入現有路徑 → 嘗試開新車
+                # 剩餘節點都無法插入現有路徑 → 嘗試動態開新車 (支援 UAV 救援)
                 for node in pool:
-                    new_route = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
-                    new_route.add_node(node)
-                    if self.problem.evaluate_route(new_route):
-                        solution.add_mcs_route(new_route)
+                    inserted = False
+                    if node.node_type == 'urgent':
+                        nearest_centroid = self.problem._find_nearest_centroid(node)
+                        new_mcs = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
+                        new_mcs.start_node = nearest_centroid
+                        new_mcs.add_node(node)
+                        mcs_feasible = self.problem.evaluate_route(new_mcs)
+                        mcs_cost = new_mcs.total_user_waiting_time if mcs_feasible else float('inf')
+                        
+                        new_uav = Route(vehicle_type='uav', vehicle_id=len(solution.uav_routes))
+                        new_uav.add_node(node)
+                        uav_feasible = self.problem.evaluate_route(new_uav)
+                        uav_cost = new_uav.total_user_waiting_time if uav_feasible else float('inf')
+                        
+                        if mcs_feasible or uav_feasible:
+                            if uav_cost <= mcs_cost:
+                                solution.add_uav_route(new_uav)
+                            else:
+                                solution.add_mcs_route(new_mcs)
+                            inserted = True
                     else:
+                        nearest_centroid = self.problem._find_nearest_centroid(node)
+                        new_mcs = Route(vehicle_type='mcs', vehicle_id=len(solution.mcs_routes))
+                        new_mcs.start_node = nearest_centroid
+                        new_mcs.add_node(node)
+                        if self.problem.evaluate_route(new_mcs):
+                            solution.add_mcs_route(new_mcs)
+                            inserted = True
+                            
+                    if not inserted:
                         still_unassigned.append(node)
+                
                 pool.clear()
                 break
             
@@ -435,11 +490,17 @@ class ALNSSolver:
             if best_insert_type == 'mcs':
                 route = solution.mcs_routes[best_insert_route_idx]
                 route.insert_node(best_insert_pos, best_node)
-                self.problem.evaluate_route(route)
+                if not self.problem.evaluate_route(route):
+                    route.remove_node(best_insert_pos)
+                    self.problem.evaluate_route(route)
+                    still_unassigned.append(best_node)
             elif best_insert_type == 'uav':
                 route = solution.uav_routes[best_insert_route_idx]
                 route.insert_node(best_insert_pos, best_node)
-                self.problem.evaluate_route(route)
+                if not self.problem.evaluate_route(route):
+                    route.remove_node(best_insert_pos)
+                    self.problem.evaluate_route(route)
+                    still_unassigned.append(best_node)
             
             pool.pop(best_node_idx)
         
