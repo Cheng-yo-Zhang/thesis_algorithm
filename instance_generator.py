@@ -69,7 +69,7 @@ class InstanceConfig:
     
     # Spatial parameters
     spatial_type: str = "random"  # "random", "clustered", "rc"
-    area_size: int = 100          # 100 km × 100 km (fixed)
+    area_size: int = 50           # 50 km × 50 km (fixed)
     n_clusters: int = 5           # For clustered/rc types
     cluster_std: float = 10.0     # Standard deviation within clusters (km)
     
@@ -95,9 +95,9 @@ class InstanceConfig:
         'high': 0.20,     # 20% low SOC (need more charging)
     })
     
-    # Depot location (center of 100km × 100km area)
-    depot_x: int = 50
-    depot_y: int = 50
+    # Depot location (center of 50km × 50km area)
+    depot_x: int = 25
+    depot_y: int = 25
     
     # Random seed for reproducibility
     seed: int = 42
@@ -493,7 +493,7 @@ def main():
         urgent_ratio=params['urgent_ratio'],
         seed=params['seed'],
         # Fixed parameters
-        area_size=100,           # 100km × 100km
+        area_size=50,            # 50km × 50km
         planning_horizon=1440,   # 24 hours
     )
     
