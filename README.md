@@ -46,4 +46,5 @@ rmdir /s venv
 ```bash=
 rm -rf venv
 pipreqs . --force --encoding utf-8 --savepath packages.txt
+pip freeze > requirements.txt
 ```
