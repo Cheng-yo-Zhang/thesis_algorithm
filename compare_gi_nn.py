@@ -1,67 +1,39 @@
+"""
+Greedy Insertion vs Nearest-Neighbor Chain — 覆蓋率比較 + 前 10 slot 路徑圖
+=============================================================================
+輸出到 comparison_gi_nn/ 資料夾
+"""
+
 import numpy as np
 from pathlib import Path
-from typing import List, Dict
 from copy import deepcopy
+from typing import List
 
 from config import Config
 from models import Node, VehicleState, Route, Solution
 from problem import ChargingSchedulingProblem
 from simulation import initialize_fleet, simulate_dispatch_window
-from alns import ALNSSolver
-
-# Re-export for backwards compatibility
-__all__ = [
-    "Config", "Node", "VehicleState", "Route", "Solution",
-    "ChargingSchedulingProblem", "initialize_fleet", "simulate_dispatch_window",
-    "run_simulation",
-]
+from visualization import (
+    export_requests_csv, plot_per_slot_mcs_routes, print_terminal_report,
+)
 
 
-def run_simulation(cfg: Config = None, verbose: bool = True):
+def run_with_strategy(strategy: str, cfg: Config, verbose: bool = False):
     """
-    執行 rolling-horizon 批次調度，回傳逐 slot 資料。
-
-    Args:
-        cfg: 實驗配置
-        verbose: 是否印出逐 slot 詳細資訊 (grid search 時設 False)
-
-    Returns:
-        slot_data: 每個 slot 的詳細資料 (requests, solution snapshot, metrics)
-        fleet: 最終車隊狀態
-        problem: ChargingSchedulingProblem 實例
-        cfg: 配置
-        stats: 最終統計 dict (含測量窗口服務率)
+    用指定策略跑一次完整模擬。
+    strategy: "greedy_insertion" | "nearest_neighbor"
     """
-    cfg = cfg or Config()
     problem = ChargingSchedulingProblem(cfg)
-    if verbose:
-        problem.print_config()
-
-    # 初始化車隊
     fleet = initialize_fleet(cfg, problem.depot)
-    active_count = sum(1 for vs in fleet if vs.is_active)
-    reserve_count = sum(1 for vs in fleet if not vs.is_active)
-    if verbose:
-        print(f"Fleet initialized: active={active_count}, reserve={reserve_count}")
 
-    # 請求池
-    all_requests: List[Node] = []  # 所有已生成的請求 (歷史紀錄)
-    backlog: List[Node] = []       # 上一 slot 未服務的 backlog
+    all_requests: List[Node] = []
+    backlog: List[Node] = []
 
-    # 統計
     total_generated = 0
     total_served = 0
     total_missed = 0
     slot_data: List[dict] = []
-
     num_slots = cfg.T_TOTAL // cfg.DELTA_T
-
-    if verbose:
-        print(f"\n{'='*80}")
-        print(f"Batch Dispatching | {num_slots} slots x {cfg.DELTA_T}min = {cfg.T_TOTAL}min")
-        print(f"Measurement Window: t={cfg.MEASUREMENT_START}-{cfg.MEASUREMENT_END} "
-              f"(slot {cfg.MEASUREMENT_START // cfg.DELTA_T + 1}-{cfg.MEASUREMENT_END // cfg.DELTA_T})")
-        print(f"{'='*80}\n")
 
     for k in range(1, num_slots + 1):
         slot_start = (k - 1) * cfg.DELTA_T
@@ -69,11 +41,9 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
         dispatch_time = slot_end
         next_decision_time = slot_end + cfg.DELTA_T
 
-        # Step 1: 生成本期新請求
         new_requests = problem.generate_requests(slot_start, slot_number=k)
         total_generated += len(new_requests)
 
-        # Step 2: 處理 backlog — 逾期者標記 missed
         active_backlog: List[Node] = []
         slot_missed = 0
         for req in backlog:
@@ -85,10 +55,9 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
                 req.status = 'backlog'
                 active_backlog.append(req)
 
-        # Active request pool = new + active_backlog
         active_pool = new_requests + active_backlog
 
-        # Step 3a: 更新 committed nodes (runs every slot, even if pool is empty)
+        # Update committed nodes
         completed_committed = 0
         for vs in fleet:
             if vs.is_active:
@@ -106,17 +75,10 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
                     vs.committed_departures = still_departures
                 vs.available_time = max(vs.available_time, dispatch_time)
             else:
-                vs.available_time = slot_end  # reserve 待命
+                vs.available_time = slot_end
         total_served += completed_committed
 
         if not active_pool:
-            if verbose:
-                r_t = cfg.get_arrival_rate_profile(slot_start)
-                active_vehicles = sum(1 for vs in fleet if vs.is_active)
-                print(f"  Slot {k:3d} [t={slot_start:.0f}-{slot_end:.0f}] r(t)={r_t:.1f} | "
-                      f"new=0, backlog=0, pool=0 | "
-                      f"served={completed_committed}, missed={slot_missed} | "
-                      f"fleet={active_vehicles}")
             slot_data.append({
                 "slot": k, "slot_start": slot_start, "slot_end": slot_end,
                 "new_requests": [], "active_backlog": [],
@@ -126,37 +88,24 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
             })
             continue
 
-        # Step 3b: 更新距離矩陣 (加入新節點)
         all_customer_nodes = [n for n in all_requests if n.status not in ('served', 'missed')]
         all_customer_nodes.extend(new_requests)
         all_requests.extend(new_requests)
         problem.setup_nodes(all_customer_nodes)
 
-        # Step 4: 計算 vehicle release states
-
-        # Step 5: Greedy insertion + reserve activation
-        solution = problem.greedy_insertion_construction(active_pool, fleet, dispatch_window_end=next_decision_time)
-
-        # CF-ALNS improvement (only when strategy == "alns")
-        if cfg.CONSTRUCTION_STRATEGY == "alns":
-            assigned_count = sum(len(r.nodes) for r in solution.get_all_routes())
-            if assigned_count > 0:
-                solver = ALNSSolver(problem, cfg)
-                solution = solver.solve(solution, dispatch_window_end=next_decision_time)
-                # Phase 3: Cross-Fleet Local Search
-                if cfg.ENABLE_CROSS_FLEET_LS:
-                    solution = solver.cross_fleet_local_search(solution)
+        # === 策略分歧點 ===
+        if strategy == "nearest_neighbor":
+            solution = problem.nearest_neighbor_construction(
+                active_pool, fleet, dispatch_window_end=next_decision_time)
+        else:
+            solution = problem.greedy_insertion_construction(
+                active_pool, fleet, dispatch_window_end=next_decision_time)
 
         n_assigned = sum(1 for n in active_pool if n.status == 'assigned')
-        n_unassigned = len(solution.unassigned_nodes)
+        snapshot = deepcopy(solution)
 
-        # Snapshot before simulation mutates node statuses
-        snapshot = deepcopy(solution) if verbose else None
-
-        # Step 6: 模擬執行
         simulate_dispatch_window(solution, fleet, problem, next_decision_time)
 
-        # Step 7: 更新 backlog
         new_backlog: List[Node] = []
         for node in solution.unassigned_nodes:
             if node.due_date > next_decision_time:
@@ -167,17 +116,15 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
                 total_missed += 1
                 slot_missed += 1
 
-        # 也檢查 assigned 但未完成服務的
         for route in solution.get_all_routes():
             for node in route.nodes:
                 if node.status == 'assigned':
-                    # 尚未開始服務 → backlog
                     node.status = 'backlog'
                     new_backlog.append(node)
 
         backlog = new_backlog
 
-        # Step 7b: UAV re-queue — UAV 服務後的剩餘需求重新排入 MCS
+        # UAV re-queue
         if cfg.UAV_REQUEUE_FOR_MCS:
             for route in solution.uav_routes:
                 for node in route.nodes:
@@ -194,7 +141,7 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
                             status='backlog',
                             ev_current_soc=node.ev_current_soc,
                             original_demand=node.residual_demand,
-                            uav_served=True,  # 防止 UAV 再次服務
+                            uav_served=True,
                             residual_demand=node.residual_demand,
                             origin_slot=k,
                         )
@@ -202,7 +149,6 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
                         backlog.append(followup)
                         total_generated += 1
 
-        # 計算本 slot 完成的服務: simulate 中直接 served 的
         direct_served = 0
         for route in solution.get_all_routes():
             for node in route.nodes:
@@ -210,16 +156,6 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
                     direct_served += 1
         slot_served = completed_committed + direct_served
         total_served += direct_served
-
-        if verbose:
-            r_t = cfg.get_arrival_rate_profile(slot_start)
-            active_vehicles = sum(1 for vs in fleet if vs.is_active)
-            print(f"  Slot {k:3d} [t={slot_start:.0f}-{slot_end:.0f}] r(t)={r_t:.1f} | "
-                  f"new={len(new_requests)}, backlog_in={len(active_backlog)}, "
-                  f"pool={len(active_pool)} | "
-                  f"assigned={n_assigned}, served={slot_served}, "
-                  f"missed={slot_missed}, backlog_out={len(new_backlog)} | "
-                  f"fleet={active_vehicles}")
 
         slot_data.append({
             "slot": k, "slot_start": slot_start, "slot_end": slot_end,
@@ -229,7 +165,7 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
             "slot_missed": slot_missed, "backlog_out": new_backlog,
         })
 
-    # ==================== Terminal: sweep remaining committed nodes ====================
+    # Terminal sweep
     terminal_committed = 0
     for vs in fleet:
         for node in vs.committed_nodes:
@@ -239,14 +175,13 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
         vs.committed_departures = []
     total_served += terminal_committed
 
-    # Terminal: 標記所有 backlog 為 missed
     for req in backlog:
         req.status = 'missed'
         total_missed += 1
     backlog_remaining = len(backlog)
     backlog = []
 
-    # ==================== 測量窗口服務率 ====================
+    # Measurement window
     mw_requests = [r for r in all_requests
                    if cfg.MEASUREMENT_START <= r.ready_time < cfg.MEASUREMENT_END]
     mw_total = len(mw_requests)
@@ -254,7 +189,6 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
     mw_missed = sum(1 for r in mw_requests if r.status == 'missed')
     mw_service_rate = mw_served / mw_total if mw_total > 0 else 1.0
 
-    # 分 urgent / normal
     mw_urgent = [r for r in mw_requests if r.node_type == 'urgent']
     mw_normal = [r for r in mw_requests if r.node_type == 'normal']
     mw_urgent_served = sum(1 for r in mw_urgent if r.status == 'served')
@@ -262,10 +196,8 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
     mw_urgent_rate = mw_urgent_served / len(mw_urgent) if mw_urgent else 1.0
     mw_normal_rate = mw_normal_served / len(mw_normal) if mw_normal else 1.0
 
-    # ==================== 測量窗口車輛使用統計 ====================
-    # 統計在 MW 內實際服務過請求的 distinct vehicle IDs (per type)
     mw_served_requests = [r for r in mw_requests if r.status == 'served']
-    mw_vehicles_used = {}  # vehicle_type -> set of vehicle_ids
+    mw_vehicles_used = {}
     for r in mw_served_requests:
         vtype = r.served_by_vehicle_type
         vid = r.served_by_vehicle_id
@@ -276,18 +208,6 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
     mw_n_fast = len(mw_vehicles_used.get('mcs_fast', set()))
     mw_n_uav = len(mw_vehicles_used.get('uav', set()))
 
-    if verbose:
-        print(f"\n{'='*80}")
-        print(f"Measurement Window [t={cfg.MEASUREMENT_START}-{cfg.MEASUREMENT_END}]")
-        print(f"  Total requests: {mw_total}")
-        print(f"  Served: {mw_served} | Missed: {mw_missed}")
-        print(f"  Service Rate: {mw_service_rate:.2%}")
-        print(f"  Urgent Rate:  {mw_urgent_rate:.2%} ({mw_urgent_served}/{len(mw_urgent)})")
-        print(f"  Normal Rate:  {mw_normal_rate:.2%} ({mw_normal_served}/{len(mw_normal)})")
-        print(f"  Vehicles Used: Slow={mw_n_slow}, Fast={mw_n_fast}, UAV={mw_n_uav} "
-              f"(Total={mw_n_slow + mw_n_fast + mw_n_uav})")
-        print(f"{'='*80}")
-
     stats = {
         "total_generated": total_generated,
         "total_served": total_served,
@@ -296,7 +216,6 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
         "terminal_committed": terminal_committed,
         "all_requests": all_requests,
         "fleet": fleet,
-        # 測量窗口統計
         "mw_total": mw_total,
         "mw_served": mw_served,
         "mw_missed": mw_missed,
@@ -307,7 +226,6 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
         "mw_normal_total": len(mw_normal),
         "mw_normal_served": mw_normal_served,
         "mw_normal_rate": mw_normal_rate,
-        # 車輛使用量
         "mw_n_slow": mw_n_slow,
         "mw_n_fast": mw_n_fast,
         "mw_n_uav": mw_n_uav,
@@ -317,22 +235,58 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
 
 
 def main():
-    cfg = Config()
-    slot_data, fleet, problem, cfg, stats = run_simulation(cfg)
-
-    # Visualization & Report
-    from visualization import (
-        export_requests_csv, plot_per_slot_distribution,
-        plot_per_slot_mcs_routes, print_terminal_report,
-    )
-
-    output_dir = Path("visualization_output")
+    output_dir = Path("comparison_gi_nn")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    export_requests_csv(slot_data, output_dir / "requests.csv")
-    plot_per_slot_distribution(slot_data, cfg, output_dir)
-    plot_per_slot_mcs_routes(slot_data, cfg, problem, output_dir)
-    print_terminal_report(slot_data, cfg, stats)
+    cfg_base = Config(
+        CONSTRUCTION_STRATEGY="deadline",  # greedy insertion uses deadline sorting
+        PLOT_MAX_SLOTS=10,
+    )
+
+    strategies = {
+        "greedy_insertion": "Greedy Insertion (deadline-sorted, best-position)",
+        "nearest_neighbor": "Nearest-Neighbor Chain (closest-first, append-to-tail)",
+    }
+
+    for strat_key, strat_name in strategies.items():
+        print(f"\n{'='*80}")
+        print(f"  Strategy: {strat_name}")
+        print(f"{'='*80}")
+
+        # Use same seed for fair comparison
+        cfg = Config(
+            RANDOM_SEED=cfg_base.RANDOM_SEED,
+            CONSTRUCTION_STRATEGY=cfg_base.CONSTRUCTION_STRATEGY,
+            PLOT_MAX_SLOTS=cfg_base.PLOT_MAX_SLOTS,
+        )
+
+        slot_data, fleet, problem, cfg, stats = run_with_strategy(strat_key, cfg)
+
+        # Output subfolder
+        strat_dir = output_dir / strat_key
+        strat_dir.mkdir(parents=True, exist_ok=True)
+
+        export_requests_csv(slot_data, strat_dir / "requests.csv")
+        plot_per_slot_mcs_routes(slot_data, cfg, problem, strat_dir)
+
+        # Print summary
+        print(f"\n  --- {strat_name} ---")
+        print(f"  MW Service Rate:  {stats['mw_service_rate']:.2%}")
+        print(f"  MW Urgent Rate:   {stats['mw_urgent_rate']:.2%} "
+              f"({stats['mw_urgent_served']}/{stats['mw_urgent_total']})")
+        print(f"  MW Normal Rate:   {stats['mw_normal_rate']:.2%} "
+              f"({stats['mw_normal_served']}/{stats['mw_normal_total']})")
+        print(f"  MW Fleet Used:    {stats['mw_fleet_used']} "
+              f"(Slow={stats['mw_n_slow']}, Fast={stats['mw_n_fast']}, UAV={stats['mw_n_uav']})")
+        print(f"  Total Generated:  {stats['total_generated']}")
+        print(f"  Total Served:     {stats['total_served']}")
+        print(f"  Total Missed:     {stats['total_missed']}")
+
+    print(f"\n{'='*80}")
+    print(f"  Output saved to: {output_dir.resolve()}")
+    print(f"  - comparison_gi_nn/greedy_insertion/  (route maps + CSV)")
+    print(f"  - comparison_gi_nn/nearest_neighbor/  (route maps + CSV)")
+    print(f"{'='*80}")
 
 
 if __name__ == "__main__":
