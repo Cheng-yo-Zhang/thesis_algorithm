@@ -36,6 +36,10 @@ def run_with_strategy(strategy: str, cfg: Config, verbose: bool = False):
     slot_data: List[dict] = []
     num_slots = cfg.T_TOTAL // cfg.DELTA_T
 
+    # Multi-slot ALNS aggregation buffer
+    alns_buffer_solutions: List = []
+    alns_buffer_window_ends: List[float] = []
+
     for k in range(1, num_slots + 1):
         if k % 20 == 1 or k == num_slots:
             print(f"    [{strategy}] Slot {k}/{num_slots}...", flush=True)
@@ -103,10 +107,52 @@ def run_with_strategy(strategy: str, cfg: Config, verbose: bool = False):
 
         # GI+ALNS: 在 GI 解的基礎上跑 ALNS 改善
         if strategy == "gi_alns":
+            L = getattr(cfg, 'ALNS_LOOKAHEAD_SLOTS', 1)
             assigned_count = sum(len(r.nodes) for r in solution.get_all_routes())
-            if assigned_count > 0:
-                solver = ALNSSolver(problem, cfg)
-                solution = solver.solve(solution, dispatch_window_end=next_decision_time)
+
+            if L <= 1:
+                # Per-slot ALNS
+                if assigned_count > 0:
+                    solver = ALNSSolver(problem, cfg)
+                    solution = solver.solve(solution, dispatch_window_end=next_decision_time)
+                    if getattr(cfg, 'ENABLE_CROSS_FLEET_LS', False):
+                        solution = solver.cross_fleet_local_search(solution)
+            else:
+                # Multi-slot aggregated ALNS
+                alns_buffer_solutions.append(solution)
+                alns_buffer_window_ends.append(next_decision_time)
+
+                if len(alns_buffer_solutions) >= L or k == num_slots:
+                    merged = solution.copy()
+                    all_assigned_ids = set()
+                    for r in merged.get_all_routes():
+                        for n in r.nodes:
+                            all_assigned_ids.add(n.id)
+                    extra_nodes = []
+                    for prev_sol in alns_buffer_solutions[:-1]:
+                        for r in prev_sol.get_all_routes():
+                            for n in r.nodes:
+                                if n.id not in all_assigned_ids and n.status == 'assigned':
+                                    extra_nodes.append(n)
+                                    all_assigned_ids.add(n.id)
+                    if extra_nodes:
+                        temp_solver = ALNSSolver(problem, cfg)
+                        temp_solver._flexible_greedy_insertion(merged, extra_nodes)
+                        for r in merged.get_all_routes():
+                            problem.evaluate_route(r)
+
+                    farthest_window_end = max(alns_buffer_window_ends)
+                    total_assigned = sum(len(r.nodes) for r in merged.get_all_routes())
+
+                    if total_assigned > 0:
+                        solver = ALNSSolver(problem, cfg)
+                        merged = solver.solve(merged, dispatch_window_end=farthest_window_end)
+                        if getattr(cfg, 'ENABLE_CROSS_FLEET_LS', False):
+                            merged = solver.cross_fleet_local_search(merged)
+
+                    solution = merged
+                    alns_buffer_solutions.clear()
+                    alns_buffer_window_ends.clear()
 
         n_assigned = sum(1 for n in active_pool if n.status == 'assigned')
         snapshot = deepcopy(solution)
@@ -247,7 +293,7 @@ def main():
 
     strategies = {
         "gi_only": "Greedy Insertion (baseline)",
-        "gi_alns": "Greedy Insertion + ALNS (300 iterations)",
+        "gi_alns": "Greedy Insertion + Improved ALNS",
     }
 
     all_stats = {}
@@ -257,14 +303,28 @@ def main():
         print(f"  Strategy: {strat_name}", flush=True)
         print(f"{'='*80}", flush=True)
 
-        cfg = Config(
-            CONSTRUCTION_STRATEGY="deadline",
-            PLOT_MAX_SLOTS=10,
-            ALNS_MAX_ITERATIONS=300,
-            T_TOTAL=150,               # 10 slots only (quick demo)
-            MEASUREMENT_START=0,       # measure all slots
-            MEASUREMENT_END=150,
-        )
+        if strat_key == "gi_only":
+            cfg = Config(
+                CONSTRUCTION_STRATEGY="deadline",
+                PLOT_MAX_SLOTS=10,
+                T_TOTAL=150,
+                MEASUREMENT_START=0,
+                MEASUREMENT_END=150,
+            )
+        else:
+            cfg = Config(
+                CONSTRUCTION_STRATEGY="alns",
+                PLOT_MAX_SLOTS=10,
+                T_TOTAL=150,
+                MEASUREMENT_START=0,
+                MEASUREMENT_END=150,
+                ALNS_MAX_ITERATIONS=5000,
+                ALNS_LOOKAHEAD_SLOTS=4,
+                SA_INITIAL_TEMP=3000.0,
+                SA_COOLING_RATE=0.9998,
+                ALNS_MAX_COVERAGE_LOSS=2,
+                BETA_WAITING=10.0,
+            )
 
         slot_data, fleet, problem, cfg, stats = run_with_strategy(strat_key, cfg)
         all_stats[strat_key] = stats
@@ -320,7 +380,7 @@ def main():
         f"{'Total Missed':<25} {gi['total_missed']:>12d} {alns['total_missed']:>12d} "
         f"{alns['total_missed'] - gi['total_missed']:>+10d}",
         "",
-        "ALNS Config: 300 iterations, SA cooling=0.9995",
+        "ALNS Config: 5000 iterations, SA T0=3000, cooling=0.9998, lookahead=4 slots",
         "=" * 60,
     ]
 

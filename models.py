@@ -213,10 +213,12 @@ class Solution:
         n_miss_normal = sum(1 for n in self.unassigned_nodes if n.node_type == 'normal')
 
         unassigned_penalty = c.ALPHA_URGENT * n_miss_urgent + c.ALPHA_NORMAL * n_miss_normal
+        waiting_cost = getattr(c, 'BETA_WAITING', 0.0) * self.total_waiting_time
         route_time_cost = c.ETA_ROUTE_TIME * self.total_time
         distance_cost = c.GAMMA_DISTANCE * self.total_distance
 
-        self.total_cost = unassigned_penalty + route_time_cost + distance_cost
+        balance_penalty = getattr(c, 'LAMBDA_BALANCE', 0.0) * self._calculate_flexibility_score()
+        self.total_cost = unassigned_penalty + waiting_cost + route_time_cost + distance_cost + balance_penalty
         self.is_feasible = len(self.unassigned_nodes) == 0
         return self.total_cost
 

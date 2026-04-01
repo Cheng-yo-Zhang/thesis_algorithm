@@ -43,7 +43,7 @@ def run_comparison(
                 MCS_FAST_POWER=50.0,
                 UAV_REQUEUE_FOR_MCS=False,
                 PLOT_MAX_SLOTS=20,
-                T_TOTAL=300,               # 10 slots 生成 + 10 slots cooldown
+                T_TOTAL=1440,              # 24 hr 完整模擬
                 GENERATION_END=150,        # t=150 後停止生成，讓 backlog 跑完
                 MEASUREMENT_START=0,
                 MEASUREMENT_END=150,
@@ -85,6 +85,27 @@ def run_comparison(
     lines.append("=" * 80)
     summary_text = "\n".join(lines)
     print(summary_text)
+
+    # === Unserved requests detail ===
+    for rho in rho_values:
+        for fc_name in ["with_uav", "mcs_only"]:
+            s = all_stats[(fc_name, rho)]
+            label = "MCS+UAV" if fc_name == "with_uav" else "MCS-only"
+            missed = [r for r in s["all_requests"]
+                      if r.status == "missed"
+                      and s.get("mw_cfg_start", 0) <= r.ready_time < s.get("mw_cfg_end", float("inf"))]
+            # fallback: 直接用全部 missed
+            if not missed:
+                missed = [r for r in s["all_requests"] if r.status == "missed"]
+            if missed:
+                print(f"\n--- {label} (rho={rho}) unserved requests ({len(missed)}) ---")
+                print(f"  {'ID':>4}  {'Type':<7}  {'X':>6}  {'Y':>6}  {'Demand':>7}  "
+                      f"{'Ready':>7}  {'Due':>7}  {'TW':>6}  {'Slot':>4}  {'UAV?'}")
+                for r in missed:
+                    tw = r.due_date - r.ready_time
+                    print(f"  {r.id:>4}  {r.node_type:<7}  {r.x:6.1f}  {r.y:6.1f}  {r.demand:7.1f}  "
+                          f"{r.ready_time:7.1f}  {r.due_date:7.1f}  {tw:6.1f}  {r.origin_slot:>4}  "
+                          f"{'Y' if r.uav_served else 'N'}")
 
     summary_path = output_dir / "summary.txt"
     with open(summary_path, "w", encoding="utf-8") as f:

@@ -216,7 +216,11 @@ def plot_per_slot_mcs_routes(slot_data: List[dict], cfg: Config,
                                     xytext=(4, -4), textcoords="offset points")
 
                     vtype = route.vehicle_type.upper().replace("_", "-")
-                    label = f"{vtype}-{vid}: {route.get_node_ids()}"
+                    if route.vehicle_type == 'mcs_slow':
+                        type_idx = vid + 1
+                    else:
+                        type_idx = vid - cfg.NUM_MCS_SLOW + 1
+                    label = f"{vtype}-{type_idx}: {route.get_node_ids()}"
                     route_handles.append(
                         Line2D([0], [0], color=color, linewidth=2, label=label)
                     )
@@ -267,7 +271,8 @@ def plot_per_slot_mcs_routes(slot_data: List[dict], cfg: Config,
                                     color=color, ha="left", va="top",
                                     xytext=(4, -4), textcoords="offset points")
 
-                    label = f"UAV-{vid}: {route.get_node_ids()}"
+                    type_idx = vid - cfg.NUM_MCS_SLOW - cfg.NUM_MCS_FAST + 1
+                    label = f"UAV-{type_idx}: {route.get_node_ids()}"
                     route_handles.append(
                         Line2D([0], [0], color=color, linewidth=1.8,
                                linestyle="--", label=label)

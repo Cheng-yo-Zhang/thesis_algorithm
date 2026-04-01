@@ -458,16 +458,17 @@ class ChargingSchedulingProblem:
             self.evaluate_route(route)
 
         # 排序 — 依策略決定 request 處理順序
-        if c.CONSTRUCTION_STRATEGY == "nearest":
+        if c.CONSTRUCTION_STRATEGY == "edf":
+            # Earliest Deadline First — 只看 due_date，不考慮空間/服務時間
             sorted_requests = sorted(
                 active_requests,
-                key=lambda n: abs(n.x - self.depot.x) + abs(n.y - self.depot.y)
+                key=lambda n: (n.due_date, -n.demand)
             )
-        else:
-            # Urgency-based sorting: slack = due_date - (now + min_travel + min_service)
+        elif c.CONSTRUCTION_STRATEGY == "slack":
+            # Slack-based — 考慮空間可達性與服務時間
             dispatch_time = (dispatch_window_end - c.DELTA_T) if dispatch_window_end else 0.0
             active_positions = [vs.position for vs in vehicle_states if vs.is_active]
-            max_power = max(c.MCS_FAST_POWER, c.MCS_SLOW_POWER)  # 最快充電功率
+            max_power = max(c.MCS_FAST_POWER, c.MCS_SLOW_POWER)
 
             def _slack(n: Node) -> float:
                 if active_positions:
@@ -477,10 +478,18 @@ class ChargingSchedulingProblem:
                     )
                 else:
                     min_travel = (abs(n.x - self.depot.x) + abs(n.y - self.depot.y)) / c.MCS_SPEED
-                min_service = (n.demand / max_power) * 60.0  # kWh / kW * 60 = min
+                min_service = (n.demand / max_power) * 60.0
                 return n.due_date - (dispatch_time + min_travel + min_service)
 
             sorted_requests = sorted(active_requests, key=lambda n: (_slack(n), n.due_date))
+        elif c.CONSTRUCTION_STRATEGY == "nearest":
+            sorted_requests = sorted(
+                active_requests,
+                key=lambda n: abs(n.x - self.depot.x) + abs(n.y - self.depot.y)
+            )
+        else:
+            # fallback: due_date
+            sorted_requests = sorted(active_requests, key=lambda n: n.due_date)
         unassigned: List[Node] = []
 
         # Type-Flexible Unified Cost Dispatching
@@ -554,6 +563,146 @@ class ChargingSchedulingProblem:
         solution.unassigned_nodes = unassigned
         solution.calculate_total_cost(len(active_requests))
         return solution
+
+    # ==================== Regret-2 Insertion Construction ====================
+    def regret2_insertion_construction(
+        self,
+        active_requests: List[Node],
+        vehicle_states: List[VehicleState],
+        dispatch_window_end: float = None
+    ) -> Solution:
+        """
+        Priority-Class Regret-2 Insertion Construction
+
+        Phase 1: 對 urgent 節點跑 Regret-2 — 確保 urgent 優先佔位
+        Phase 2: 對 normal 節點跑 Regret-2 — 在剩餘空間中最佳化
+        """
+        c = self.cfg
+        solution = Solution(c)
+
+        # 為每台 active vehicle 建立 route (suffix) — 與 greedy 相同
+        vehicle_route_map: Dict[int, Tuple[str, int]] = {}
+
+        for vs in vehicle_states:
+            if not vs.is_active:
+                continue
+            route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
+            route.start_position = vs.position
+            route.start_time = vs.available_time
+            route.start_energy = vs.remaining_energy
+            route.is_deployed = len(vs.committed_nodes) > 0
+
+            if vs.vehicle_type == 'uav':
+                solution.add_uav_route(route)
+                vehicle_route_map[vs.vehicle_id] = ('uav', len(solution.uav_routes) - 1)
+            else:
+                solution.add_mcs_route(route)
+                vehicle_route_map[vs.vehicle_id] = ('mcs', len(solution.mcs_routes) - 1)
+
+            self.evaluate_route(route)
+
+        # Priority-Class: urgent 先, normal 後
+        urgent_pool = [n for n in active_requests if n.node_type == 'urgent']
+        normal_pool = [n for n in active_requests if n.node_type == 'normal']
+
+        unassigned: List[Node] = []
+        unassigned += self._regret2_insert_pool(solution, urgent_pool, dispatch_window_end)
+        unassigned += self._regret2_insert_pool(solution, normal_pool, dispatch_window_end)
+
+        # Reserve MCS Activation
+        if unassigned and c.ENABLE_RESERVE_ACTIVATION:
+            unassigned = self._try_reserve_activation(
+                solution, unassigned, vehicle_states
+            )
+
+        solution.unassigned_nodes = unassigned
+        solution.calculate_total_cost(len(active_requests))
+        return solution
+
+    def _regret2_insert_pool(
+        self,
+        solution: Solution,
+        pool: List[Node],
+        dispatch_window_end: float = None
+    ) -> List[Node]:
+        """Regret-2 迴圈：對給定 pool 中的節點依 regret 動態排序插入，回傳未能插入的節點。"""
+        pool = list(pool)
+        unassigned: List[Node] = []
+
+        while pool:
+            best_priority = None  # (regret, -due_date, -best_cost)
+            best_node = None
+            best_node_idx = -1
+            best_insertion = None
+
+            for n_idx, node in enumerate(pool):
+                options: List[Tuple[float, str, int, int]] = []
+
+                # 搜尋所有 MCS 路徑
+                for r_idx, route in enumerate(solution.mcs_routes):
+                    for pos in range(len(route.nodes) + 1):
+                        feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
+                        if feasible:
+                            bonus = self._get_type_preference_bonus(route.vehicle_type, node, dispatch_window_end)
+                            adjusted_cost = delta_cost - bonus
+                            options.append((adjusted_cost, 'mcs', r_idx, pos))
+
+                # 僅當 MCS 全部 infeasible 且為 urgent 時搜尋 UAV
+                if (not options
+                        and node.node_type == 'urgent'
+                        and self.compute_uav_delivery(node) > 0
+                        and not node.uav_served):
+                    for r_idx, route in enumerate(solution.uav_routes):
+                        for pos in range(len(route.nodes) + 1):
+                            feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
+                            if feasible:
+                                bonus = self._get_type_preference_bonus('uav', node, dispatch_window_end)
+                                adjusted_cost = delta_cost - bonus
+                                options.append((adjusted_cost, 'uav', r_idx, pos))
+
+                if not options:
+                    continue
+
+                options.sort(key=lambda x: x[0])
+                best_cost = options[0][0]
+                second_best_cost = options[1][0] if len(options) > 1 else float('inf')
+                regret = second_best_cost - best_cost
+
+                priority = (regret, -node.due_date, -best_cost)
+
+                if best_priority is None or priority > best_priority:
+                    best_priority = priority
+                    best_node = node
+                    best_node_idx = n_idx
+                    best_insertion = (options[0][1], options[0][2], options[0][3], best_cost)
+
+            if best_node is None:
+                for node in pool:
+                    unassigned.append(node)
+                pool.clear()
+                break
+
+            rt, ri, rp, _ = best_insertion
+            inserted = False
+            if rt == 'mcs':
+                target = solution.mcs_routes[ri]
+            else:
+                target = solution.uav_routes[ri]
+
+            target.insert_node(rp, best_node)
+            if self.evaluate_route(target):
+                best_node.status = 'assigned'
+                inserted = True
+            else:
+                target.remove_node(rp)
+                self.evaluate_route(target)
+
+            if not inserted:
+                unassigned.append(best_node)
+
+            pool.pop(best_node_idx)
+
+        return unassigned
 
     # ==================== Nearest-Neighbor Chain Construction ====================
     def nearest_neighbor_construction(
