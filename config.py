@@ -9,10 +9,10 @@ class Config:
     RANDOM_SEED: int = 42
     USE_HPP: bool = True              # True = HPP (固定到達率), False = NHPP (時變到達率)
     USE_FIXED_DEMAND: bool = True      # True = 每 slot 固定需求數 (不使用 Poisson)
-    FIXED_DEMAND_PER_SLOT: int = 3    # 固定需求數量
+    FIXED_DEMAND_PER_SLOT: int = 10    # 固定需求數量
     LAMBDA_BAR: float = 0.15             # 平均到達率 (requests/min), 約 9 req/hr
     URGENT_RATIO: float = 0.5          # Urgent 需求佔比 ρ
-    CONSTRUCTION_STRATEGY: str = "deadline"  # "nearest" | "deadline" | "alns"
+    CONSTRUCTION_STRATEGY: str = "regret2"  # "edf" | "slack" | "regret2" | "nearest"
     DELTA_T: int = 15                  # 排程週期 (min)
     T_TOTAL: int = 2880               # 模擬總時長 (min) — 48 小時
 
@@ -105,40 +105,31 @@ class Config:
         (1.0, 1.0), (1.0, 19.0), (19.0, 1.0), (19.0, 19.0)
     ])
 
-    # === ALNS 超參數 ===
-    ALNS_MAX_ITERATIONS: int = 5000
-    ALNS_SEGMENT_SIZE: int = 100
-    SA_INITIAL_TEMP: float = 100.0
-    SA_COOLING_RATE: float = 0.9995
-    SA_FINAL_TEMP: float = 0.01
-    SIGMA_1: float = 33.0
-    SIGMA_2: float = 13.0
-    SIGMA_3: float = 5.0
-    DESTROY_RATIO_MIN: float = 0.1
-    DESTROY_RATIO_MAX: float = 0.4
-    WORST_REMOVAL_P: float = 3.0
-    SHAW_REMOVAL_P: float = 6.0
-    REACTION_FACTOR: float = 0.1
-
-    # === Shaw Removal 相關性權重 ===
-    SHAW_W_DIST: float = 0.4           # 空間距離權重
-    SHAW_W_TIME: float = 0.3           # 時間窗相似度權重
-    SHAW_W_DEMAND: float = 0.2         # 需求量相似度權重
-    SHAW_W_TYPE: float = 0.1           # 車輛類型相似度權重
-
     # === Type-Flexible Construction 偏好獎勵 ===
     SLOW_PREFERENCE_BONUS: float = 5.0    # min — MCS-SLOW 經濟偏好獎勵
     UAV_URGENT_BONUS: float = 10.0        # min — UAV 服務 urgent 且 slack < 15min 的獎勵
 
-    # === Cross-Fleet Local Search ===
-    ENABLE_CROSS_FLEET_LS: bool = True
-    CROSS_FLEET_MAX_ITER: int = 100       # 跨車隊局部搜尋最大迭代
-
-    # === 目標函數權重 (coverage-first, route-time tie-breaker) ===
+    # === 目標函數權重 (僅供 Solution.calculate_total_cost 統計報告使用，不影響演算法決策) ===
     ALPHA_URGENT: float = 50000.0      # Urgent 未服務懲罰
     ALPHA_NORMAL: float = 10000.0      # Normal 未服務懲罰
+    BETA_WAITING: float = 10.0         # 用戶等待時間權重
     ETA_ROUTE_TIME: float = 1.0        # 路徑總時間權重
-    GAMMA_DISTANCE: float = 0.01       # 距離權重 (secondary tie-breaker)
+    GAMMA_DISTANCE: float = 0.01       # 距離權重
+
+    # === ALNS 參數 ===
+    ALNS_MAX_ITERATIONS: int = 5000
+    SA_INITIAL_TEMP: float = 3000.0
+    SA_COOLING_RATE: float = 0.9998
+    ALNS_REMOVAL_MIN: int = 3           # 每次最少移除節點數
+    ALNS_REMOVAL_MAX: int = 10          # 每次最多移除節點數
+    ALNS_MAX_COVERAGE_LOSS: int = 2     # 允許的最大 unassigned 增量
+    ALNS_SEGMENT_SIZE: int = 100        # 權重更新週期
+    ALNS_REACTION_FACTOR: float = 0.1   # 權重平滑因子 ρ
+    ALNS_SIGMA1: float = 33.0           # 獎勵: new global best
+    ALNS_SIGMA2: float = 9.0            # 獎勵: better than current
+    ALNS_SIGMA3: float = 3.0            # 獎勵: SA accepted worse
+    LAMBDA_BALANCE: float = 50.0        # 車隊平衡懲罰權重
+    ENABLE_CROSS_FLEET_LS: bool = False  # Cross-fleet local search
 
     # === Reserve MCS ===
     ENABLE_RESERVE_ACTIVATION: bool = False  # 是否啟用 reserve MCS

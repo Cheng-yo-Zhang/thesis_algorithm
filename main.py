@@ -9,7 +9,6 @@ from problem import ChargingSchedulingProblem
 from simulation import initialize_fleet, simulate_dispatch_window
 from alns import ALNSSolver
 
-# Re-export for backwards compatibility
 __all__ = [
     "Config", "Node", "VehicleState", "Route", "Solution",
     "ChargingSchedulingProblem", "initialize_fleet", "simulate_dispatch_window",
@@ -134,24 +133,29 @@ def run_simulation(cfg: Config = None, verbose: bool = True):
 
         # Step 4: 計算 vehicle release states
 
-        # Step 5: Greedy insertion + reserve activation
-        solution = problem.greedy_insertion_construction(active_pool, fleet, dispatch_window_end=next_decision_time)
+        # Step 5: Construction heuristic
+        if cfg.CONSTRUCTION_STRATEGY == "regret2":
+            solution = problem.regret2_insertion_construction(
+                active_pool, fleet, dispatch_window_end=next_decision_time
+            )
+        else:
+            solution = problem.greedy_insertion_construction(
+                active_pool, fleet, dispatch_window_end=next_decision_time
+            )
 
-        # CF-ALNS improvement (only when strategy == "alns")
-        if cfg.CONSTRUCTION_STRATEGY == "alns":
-            assigned_count = sum(len(r.nodes) for r in solution.get_all_routes())
-            if assigned_count > 0:
-                solver = ALNSSolver(problem, cfg)
-                solution = solver.solve(solution, dispatch_window_end=next_decision_time)
-                # Phase 3: Cross-Fleet Local Search
-                if cfg.ENABLE_CROSS_FLEET_LS:
-                    solution = solver.cross_fleet_local_search(solution)
+        # Step 5.5: ALNS improvement
+        assigned_count = sum(len(r.nodes) for r in solution.get_all_routes())
+        if assigned_count > 0 and getattr(cfg, 'ALNS_MAX_ITERATIONS', 0) > 0:
+            solver = ALNSSolver(problem, cfg)
+            solution = solver.solve(solution, dispatch_window_end=next_decision_time)
+            if getattr(cfg, 'ENABLE_CROSS_FLEET_LS', False):
+                solution = solver.cross_fleet_local_search(solution)
 
         n_assigned = sum(1 for n in active_pool if n.status == 'assigned')
         n_unassigned = len(solution.unassigned_nodes)
 
         # Snapshot before simulation mutates node statuses
-        snapshot = deepcopy(solution) if verbose else None
+        snapshot = deepcopy(solution)
 
         # Step 6: 模擬執行
         simulate_dispatch_window(solution, fleet, problem, next_decision_time)
