@@ -91,7 +91,11 @@ class ALNSSolver:
                 T *= cfg.SA_COOLING_RATE
                 continue
 
-            repair_ops[r_idx](candidate, removed, dispatch_window_end)
+            # 將 unassigned nodes 也納入 repair pool，讓 ALNS 有機會插入
+            prev_unassigned = list(candidate.unassigned_nodes)
+            candidate.unassigned_nodes = []
+            repair_pool = removed + prev_unassigned
+            repair_ops[r_idx](candidate, repair_pool, dispatch_window_end)
             candidate.calculate_total_cost(total_customers)
 
             # Coverage protection
