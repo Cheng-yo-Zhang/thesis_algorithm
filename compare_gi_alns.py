@@ -323,7 +323,8 @@ def main():
                 SA_INITIAL_TEMP=3000.0,
                 SA_COOLING_RATE=0.9998,
                 ALNS_MAX_COVERAGE_LOSS=2,
-                BETA_WAITING=10.0,
+                BETA_WAITING_URGENT=5.0,
+                BETA_WAITING_NORMAL=0.5,
             )
 
         slot_data, fleet, problem, cfg, stats = run_with_strategy(strat_key, cfg)

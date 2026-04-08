@@ -109,17 +109,25 @@ class Config:
     SLOW_PREFERENCE_BONUS: float = 5.0    # min — MCS-SLOW 經濟偏好獎勵
     UAV_URGENT_BONUS: float = 10.0        # min — UAV 服務 urgent 且 slack < 15min 的獎勵
 
-    # === 目標函數權重 (僅供 Solution.calculate_total_cost 統計報告使用，不影響演算法決策) ===
-    ALPHA_URGENT: float = 50000.0      # Urgent 未服務懲罰
-    ALPHA_NORMAL: float = 10000.0      # Normal 未服務懲罰
-    BETA_WAITING: float = 10.0         # 用戶等待時間權重
-    ETA_ROUTE_TIME: float = 1.0        # 路徑總時間權重
-    GAMMA_DISTANCE: float = 0.01       # 距離權重
+    # === 目標函數權重 ===
+    # Z = α_u·N_miss_u + α_n·N_miss_n + β_u·W_urgent + β_n·W_normal + γ·D_total
+    #
+    # 懲罰值推導 (基於問題規模):
+    #   max_detour = 2 × AREA_SIZE × √2 ≈ 56.6 km
+    #   max_single_cost = γ × max_detour + β_u × TW_urgent_max
+    #                   = 1.0 × 56.6 + 5.0 × 60 ≈ 357
+    #   α_u = 10 × max_single_cost ≈ 3500
+    #   α_n =  3 × max_single_cost ≈ 1000
+    ALPHA_URGENT: float = 3500.0       # Urgent 未服務懲罰 (10× 最大單趟成本)
+    ALPHA_NORMAL: float = 1000.0       # Normal 未服務懲罰 ( 3× 最大單趟成本)
+    BETA_WAITING_URGENT: float = 5.0   # Urgent 用戶回應時間權重 (min)
+    BETA_WAITING_NORMAL: float = 0.5   # Normal 用戶回應時間權重 (min)
+    GAMMA_DISTANCE: float = 1.0        # 行駛距離權重 (km)，對應油耗/電耗
 
     # === ALNS 參數 ===
     ALNS_MAX_ITERATIONS: int = 5000
-    SA_INITIAL_TEMP: float = 3000.0
-    SA_COOLING_RATE: float = 0.9998
+    SA_INITIAL_TEMP: float = 200.0     # 校準至新 cost scale (典型 Δcost≈50-200)
+    SA_COOLING_RATE: float = 0.9995    # Final T ≈ 200×0.082 = 16.4
     ALNS_REMOVAL_MIN: int = 3           # 每次最少移除節點數
     ALNS_REMOVAL_MAX: int = 10          # 每次最多移除節點數
     ALNS_MAX_COVERAGE_LOSS: int = 2     # 允許的最大 unassigned 增量
@@ -128,7 +136,7 @@ class Config:
     ALNS_SIGMA1: float = 33.0           # 獎勵: new global best
     ALNS_SIGMA2: float = 9.0            # 獎勵: better than current
     ALNS_SIGMA3: float = 3.0            # 獎勵: SA accepted worse
-    LAMBDA_BALANCE: float = 50.0        # 車隊平衡懲罰權重
+    LAMBDA_BALANCE: float = 5.0          # ALNS load-aware penalty 權重 (內部用)
     ENABLE_CROSS_FLEET_LS: bool = False  # Cross-fleet local search
 
     # === Reserve MCS ===

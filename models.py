@@ -170,9 +170,11 @@ class Solution:
 
     def calculate_total_cost(self, total_customers: int = None) -> float:
         """
-        計算 coverage-first 目標函數值
-        Cost = α_u × N_miss_urgent + α_n × N_miss_normal
-             + η × T_total + γ × D_total
+        目標函數 — 三項可解釋成本
+
+        Z = α_u · N_miss_urgent  +  α_n · N_miss_normal     (未服務懲罰)
+          + β_u · W_urgent_total +  β_n · W_normal_total     (回應時間成本)
+          + γ   · D_total                                    (行駛成本)
         """
         all_routes = self.get_all_routes()
         c = self.cfg
@@ -207,18 +209,15 @@ class Solution:
         else:
             self.coverage_rate = 1.0
 
-        self.flexibility_score = self._calculate_flexibility_score()
-
         n_miss_urgent = sum(1 for n in self.unassigned_nodes if n.node_type == 'urgent')
         n_miss_normal = sum(1 for n in self.unassigned_nodes if n.node_type == 'normal')
 
-        unassigned_penalty = c.ALPHA_URGENT * n_miss_urgent + c.ALPHA_NORMAL * n_miss_normal
-        waiting_cost = getattr(c, 'BETA_WAITING', 0.0) * self.total_waiting_time
-        route_time_cost = c.ETA_ROUTE_TIME * self.total_time
-        distance_cost = c.GAMMA_DISTANCE * self.total_distance
+        miss_penalty = c.ALPHA_URGENT * n_miss_urgent + c.ALPHA_NORMAL * n_miss_normal
+        response_cost = (c.BETA_WAITING_URGENT * urgent_wait_sum
+                         + c.BETA_WAITING_NORMAL * normal_wait_sum)
+        travel_cost = c.GAMMA_DISTANCE * self.total_distance
 
-        balance_penalty = getattr(c, 'LAMBDA_BALANCE', 0.0) * self._calculate_flexibility_score()
-        self.total_cost = unassigned_penalty + waiting_cost + route_time_cost + distance_cost + balance_penalty
+        self.total_cost = miss_penalty + response_cost + travel_cost
         self.is_feasible = len(self.unassigned_nodes) == 0
         return self.total_cost
 
