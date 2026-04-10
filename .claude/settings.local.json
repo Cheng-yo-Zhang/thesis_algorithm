@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(ls venv/Scripts/python*)",
+      "Bash(venv/Scripts/python.exe exp_nn_regret2_alns.py)",
+      "Bash(tee /tmp/exp_run.log)"
+    ]
+  }
+}
