@@ -155,10 +155,23 @@ def get_metrics(sol):
     total = served + missed
     coverage = served / total * 100 if total > 0 else 100.0
     last_dep = max(r.departure_times[-1] for r in active if r.departure_times) if active else 0.0
+
+    slow_distance = sum(r.total_distance for r in sol.mcs_routes
+                        if r.vehicle_type == 'mcs_slow')
+    fast_distance = sum(r.total_distance for r in sol.mcs_routes
+                        if r.vehicle_type == 'mcs_fast')
+    mcs_distance = slow_distance + fast_distance
+    uav_distance = sum(r.total_distance for r in sol.uav_routes)
+    mcs_served = sum(len(r.nodes) for r in sol.mcs_routes)
+    uav_served = sum(len(r.nodes) for r in sol.uav_routes)
+
     return {
         'served': served, 'missed': missed, 'total': total,
         'coverage': coverage, 'last_dep': last_dep,
         'cost': sol.total_cost, 'distance': sol.total_distance,
+        'slow_distance': slow_distance, 'fast_distance': fast_distance,
+        'mcs_distance': mcs_distance, 'uav_distance': uav_distance,
+        'mcs_served': mcs_served, 'uav_served': uav_served,
     }
 
 
@@ -284,26 +297,44 @@ def main():
     fig, ax = plt.subplots(figsize=(9, 5.5))
     for name in algo_names:
         dep = [m['last_dep'] for m in all_metrics[name]]
-        srv = [m['served'] for m in all_metrics[name]]
         ax.plot(demand_levels, dep,
                 marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
                 linewidth=2, markersize=8, label=name, zorder=5)
-        for i, n in enumerate(demand_levels):
-            ax.annotate(f'({srv[i]})', (n, dep[i]),
-                        fontsize=7, color=ALGO_COLORS[name], fontweight='bold',
-                        ha='left', va='bottom', xytext=(4, 3),
-                        textcoords='offset points')
 
     ax.set_xlabel('Number of Requests (N)', fontsize=12)
     ax.set_ylabel('Last Completion Time (min)', fontsize=12)
     ax.set_title('Last Completion Time vs Demand\n'
-                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]  (N) = served count',
+                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]',
                  fontsize=13, fontweight='bold')
     ax.set_xticks(demand_levels)
     ax.legend(fontsize=11, loc='upper left')
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     path = out_dir / "fig_completion_time_vs_demand.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [Saved] {path}")
+
+    # ==============================================================
+    #  圖 B2: Served Count vs Last Completion Time (efficiency view)
+    # ==============================================================
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    for name in algo_names:
+        dep = [m['last_dep'] for m in all_metrics[name]]
+        srv = [m['served'] for m in all_metrics[name]]
+        ax.plot(dep, srv,
+                marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
+                linewidth=2, markersize=8, label=name, zorder=5)
+
+    ax.set_xlabel('Last Completion Time (min)', fontsize=12)
+    ax.set_ylabel('Served Customers', fontsize=12)
+    ax.set_title('Throughput vs Completion Time\n'
+                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]  Upper-left = better',
+                 fontsize=13, fontweight='bold')
+    ax.legend(fontsize=11, loc='lower right')
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    path = out_dir / "fig_served_vs_completion_time.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  [Saved] {path}")
@@ -327,6 +358,67 @@ def main():
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     path = out_dir / "fig_objective_vs_demand.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [Saved] {path}")
+
+    # ==============================================================
+    #  圖 D: Total Distance vs Demand (MCS / UAV separated)
+    # ==============================================================
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharex=True)
+    for ax, (key, sub_title) in zip(
+        axes,
+        [('mcs_distance', 'MCS Total Distance (Manhattan)'),
+         ('uav_distance', 'UAV Total Distance (Euclidean)')]
+    ):
+        for name in algo_names:
+            vals = [m[key] for m in all_metrics[name]]
+            ax.plot(demand_levels, vals,
+                    marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
+                    linewidth=2, markersize=8, label=name, zorder=5)
+        ax.set_xlabel('Number of Requests (N)', fontsize=12)
+        ax.set_ylabel('Total Distance (km)', fontsize=12)
+        ax.set_title(sub_title, fontsize=12, fontweight='bold')
+        ax.set_xticks(demand_levels)
+        ax.legend(fontsize=10, loc='upper left')
+        ax.grid(True, alpha=0.3)
+    fig.suptitle('Total Travel Distance vs Demand  '
+                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]',
+                 fontsize=13, fontweight='bold')
+    fig.tight_layout()
+    path = out_dir / "fig_total_distance_vs_demand.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  [Saved] {path}")
+
+    # ==============================================================
+    #  圖 E: Distance per Served Customer vs Demand (MCS / UAV separated)
+    # ==============================================================
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharex=True)
+    for ax, (dist_key, srv_key, sub_title) in zip(
+        axes,
+        [('mcs_distance', 'mcs_served', 'MCS Distance per Served'),
+         ('uav_distance', 'uav_served', 'UAV Distance per Served')]
+    ):
+        for name in algo_names:
+            vals = [
+                m[dist_key] / m[srv_key] if m[srv_key] > 0 else 0.0
+                for m in all_metrics[name]
+            ]
+            ax.plot(demand_levels, vals,
+                    marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
+                    linewidth=2, markersize=8, label=name, zorder=5)
+        ax.set_xlabel('Number of Requests (N)', fontsize=12)
+        ax.set_ylabel('Distance per Served (km/customer)', fontsize=12)
+        ax.set_title(sub_title, fontsize=12, fontweight='bold')
+        ax.set_xticks(demand_levels)
+        ax.legend(fontsize=10, loc='upper right')
+        ax.grid(True, alpha=0.3)
+    fig.suptitle('Route Efficiency vs Demand  '
+                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]  Lower = better',
+                 fontsize=13, fontweight='bold')
+    fig.tight_layout()
+    path = out_dir / "fig_distance_per_served_vs_demand.png"
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  [Saved] {path}")
