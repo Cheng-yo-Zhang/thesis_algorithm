@@ -34,9 +34,9 @@ SEED = 42
 ALGO_NAMES = ['NN', 'Greedy', 'ALNS']
 
 TYPE_COLORS = {
-    'slow': '#2ecc71',
-    'fast': '#e67e22',
-    'uav':  '#9b59b6',
+    'slow': '#1E88E5',
+    'fast': '#1E88E5',
+    'uav':  '#1E88E5',
 }
 
 OUTPUT_DIR = Path("results_distance_breakdown")

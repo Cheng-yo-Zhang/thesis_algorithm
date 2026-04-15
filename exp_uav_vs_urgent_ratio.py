@@ -12,12 +12,9 @@ Sweep:
     NUM_UAV       ∈ [0, 4]     → two lines on the plot
 
 Output:
-    results_uav_vs_urgent_ratio/raw.csv
     results_uav_vs_urgent_ratio/urgent_miss_rate.png
-    results_uav_vs_urgent_ratio/urgent_miss_rate.pdf
 """
 
-import csv
 import time
 import random
 from pathlib import Path
@@ -40,7 +37,7 @@ SEED = 42
 N_REQUESTS = 20
 NUM_MCS_SLOW = 3
 NUM_MCS_FAST = 2
-ALNS_ITER = 1000
+ALNS_ITER = 5000
 
 OUTPUT_DIR = Path("results_uav_vs_urgent_ratio")
 STRATEGY = {"construction": "regret2", "alns_iter": ALNS_ITER}
@@ -165,13 +162,6 @@ def run_sweep() -> list:
     print("=" * 72)
     print(f"Sweep done in {total_elapsed:.1f}s")
 
-    csv_path = OUTPUT_DIR / "raw.csv"
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"CSV saved: {csv_path}")
-
     return rows
 
 
@@ -198,9 +188,7 @@ def _group_by_uav(rows: list) -> dict:
 
 def _save(fig, name: str) -> None:
     png_path = OUTPUT_DIR / f"{name}.png"
-    pdf_path = OUTPUT_DIR / f"{name}.pdf"
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
     print(f"  saved: {png_path.name}")
 
@@ -233,68 +221,10 @@ def plot_urgent_miss_rate(by_uav: dict) -> None:
                "UAV Impact on Urgent Miss Rate", "urgent_miss_rate")
 
 
-def plot_urgent_waiting_time(by_uav: dict) -> None:
-    _line_plot(by_uav, "avg_wait_urgent", "Avg Urgent Waiting Time (min)",
-               "UAV Impact on Urgent Waiting Time", "urgent_waiting_time")
-
-
-def plot_normal_miss_rate(by_uav: dict) -> None:
-    _line_plot(by_uav, "normal_miss_rate", "Normal Miss Rate",
-               "UAV Side Effect on Normal Miss Rate", "normal_miss_rate")
-
-
-def plot_total_cost(by_uav: dict) -> None:
-    _line_plot(by_uav, "total_cost", "Total Cost Z",
-               "UAV Impact on Total Cost", "total_cost")
-
-
-def plot_task_split_stacked(by_uav: dict) -> None:
-    """Stacked area: urgent served by vehicle type. Two subplots — baseline vs UAV."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
-    layer_colors = {
-        "mcs_slow": "#2ecc71",
-        "mcs_fast": "#e67e22",
-        "uav": "#9b59b6",
-    }
-    titles = {0: "Baseline (No UAV)", NUM_UAV_LIST[1]: f"With UAV (K={NUM_UAV_LIST[1]})"}
-
-    for ax, k in zip(axes, NUM_UAV_LIST):
-        xs = [r["rho"] for r in by_uav[k]]
-        slow = np.array([r["urgent_by_slow"] for r in by_uav[k]])
-        fast = np.array([r["urgent_by_fast"] for r in by_uav[k]])
-        uav = np.array([r["urgent_by_uav"] for r in by_uav[k]])
-        missed = np.array([r["urgent_missed"] for r in by_uav[k]])
-
-        ax.stackplot(
-            xs, slow, fast, uav, missed,
-            labels=["MCS-Slow", "MCS-Fast", "UAV", "Missed"],
-            colors=[layer_colors["mcs_slow"], layer_colors["mcs_fast"],
-                    layer_colors["uav"], "#cccccc"],
-            alpha=0.85,
-        )
-        ax.set_xlabel(r"Urgent Ratio $\rho$", fontsize=12)
-        ax.set_title(titles.get(k, f"K={k}"), fontsize=13)
-        ax.set_xlim(0.1, 0.9)
-        ax.set_xticks(URGENT_RATIOS)
-        ax.grid(True, linestyle=":", alpha=0.5)
-        if k == 0:
-            ax.set_ylabel("Urgent Requests (count)", fontsize=12)
-        ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
-
-    fig.suptitle("Urgent Task Allocation by Vehicle Type", fontsize=14,
-                 fontweight="bold")
-    fig.tight_layout()
-    _save(fig, "task_split_stacked")
-
-
 def plot_all(rows: list) -> None:
     by_uav = _group_by_uav(rows)
     print("Plotting figures:")
     plot_urgent_miss_rate(by_uav)
-    plot_urgent_waiting_time(by_uav)
-    plot_normal_miss_rate(by_uav)
-    plot_total_cost(by_uav)
-    plot_task_split_stacked(by_uav)
 
 
 if __name__ == "__main__":

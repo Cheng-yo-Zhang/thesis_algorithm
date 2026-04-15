@@ -16,11 +16,9 @@ Each TW value sets BOTH URGENT_TW_MIN and URGENT_TW_MAX to the same value,
 so every urgent request gets exactly that time window (no sampling noise).
 
 Output:
-    results_uav_vs_tw/raw.csv
-    results_uav_vs_tw/urgent_miss_rate.png / .pdf
+    results_uav_vs_tw/urgent_miss_rate.png
 """
 
-import csv
 import time
 import random
 from pathlib import Path
@@ -37,14 +35,14 @@ from exp_fleet_vs_demand import generate_static_requests, solve_once
 
 
 # === Experiment Parameters ===
-TW_VALUES = [15, 20, 30, 45, 60, 90, 120, 180]
+TW_VALUES = [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
 NUM_UAV_LIST = [0, 1]
 SEED = 42
 N_REQUESTS = 20
 NUM_MCS_SLOW = 3
 NUM_MCS_FAST = 2
 URGENT_RATIO = 0.5
-ALNS_ITER = 1000
+ALNS_ITER = 5000
 
 OUTPUT_DIR = Path("results_uav_vs_tw")
 STRATEGY = {"construction": "regret2", "alns_iter": ALNS_ITER}
@@ -141,13 +139,6 @@ def run_sweep() -> list:
     print("=" * 72)
     print(f"Sweep done in {total_elapsed:.1f}s")
 
-    csv_path = OUTPUT_DIR / "raw.csv"
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"CSV saved: {csv_path}")
-
     return rows
 
 
@@ -176,23 +167,16 @@ def plot(rows: list) -> None:
     ax.set_xlabel("Urgent Time Window (min)", fontsize=12)
     ax.set_ylabel("Urgent Miss Rate", fontsize=12)
     ax.set_ylim(bottom=0)
-    ax.set_xscale("log")
     ax.set_xticks(TW_VALUES)
-    ax.set_xticklabels([str(v) for v in TW_VALUES])
-    ax.get_xaxis().set_major_formatter(plt.FuncFormatter(lambda v, _: f"{int(v)}"))
-    ax.minorticks_off()
     ax.grid(True, linestyle=":", alpha=0.6, which="major")
     ax.legend(loc="upper right", frameon=True)
     ax.set_title("UAV Value vs Problem Hardness (Time Window)", fontsize=13)
 
     fig.tight_layout()
     png_path = OUTPUT_DIR / "urgent_miss_rate.png"
-    pdf_path = OUTPUT_DIR / "urgent_miss_rate.pdf"
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
-    fig.savefig(pdf_path, bbox_inches="tight")
     plt.close(fig)
     print(f"Figure saved: {png_path}")
-    print(f"Figure saved: {pdf_path}")
 
 
 if __name__ == "__main__":
