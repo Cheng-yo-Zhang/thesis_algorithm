@@ -104,12 +104,9 @@ def plot(rows: list) -> None:
     x_pos = np.arange(len(ALGO_NAMES))
     width = 0.55
 
-    ax.bar(x_pos, slow_vals, width,
-           label='MCS-Slow', color=TYPE_COLORS['slow'])
-    ax.bar(x_pos, fast_vals, width, bottom=slow_vals,
-           label='MCS-Fast', color=TYPE_COLORS['fast'])
-    ax.bar(x_pos, uav_vals, width, bottom=slow_vals + fast_vals,
-           label='UAV', color=TYPE_COLORS['uav'])
+    ax.bar(x_pos, slow_vals, width, color=TYPE_COLORS['slow'])
+    ax.bar(x_pos, fast_vals, width, bottom=slow_vals, color=TYPE_COLORS['fast'])
+    ax.bar(x_pos, uav_vals, width, bottom=slow_vals + fast_vals, color=TYPE_COLORS['uav'])
 
     totals = slow_vals + fast_vals + uav_vals
     y_top = totals.max() if totals.max() > 0 else 1.0
@@ -121,12 +118,10 @@ def plot(rows: list) -> None:
     ax.set_xticks(x_pos)
     ax.set_xticklabels(ALGO_NAMES, fontsize=11)
     ax.set_ylabel('Total Distance (km)', fontsize=12)
-    ax.set_title(f'Distance Breakdown by Vehicle Type  (N={N_CUSTOMERS})\n'
+    ax.set_title(f'Distance\n'
                  '[Fleet: 3 SLOW + 2 FAST + 1 UAV]',
                  fontsize=13, fontweight='bold')
     ax.set_ylim(top=y_top * 1.12)
-    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10),
-              ncol=3, fontsize=10, frameon=False)
     ax.grid(True, axis='y', alpha=0.3)
     ax.set_axisbelow(True)
     fig.tight_layout()
