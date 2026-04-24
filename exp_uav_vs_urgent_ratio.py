@@ -32,7 +32,7 @@ from exp_fleet_vs_demand import generate_static_requests, solve_once
 
 # === Experiment Parameters ===
 URGENT_RATIOS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-NUM_UAV_LIST = [0, 1]
+NUM_UAV_LIST = [0, 1, 2, 3]
 SEED = 42
 N_REQUESTS = 20
 NUM_MCS_SLOW = 3
@@ -169,11 +169,11 @@ LINE_STYLES = {
     0: dict(label="Baseline (No UAV)", linestyle="--", marker="o",
             color="#7f8c8d"),
     1: dict(label="With UAV (K=1)", linestyle="-", marker="s",
+            color="#f39c12"),
+    2: dict(label="With UAV (K=2)", linestyle="-", marker="^",
             color="#e74c3c"),
-    2: dict(label="With UAV (K=2)", linestyle="-", marker="s",
-            color="#e74c3c"),
-    4: dict(label="With UAV (K=4)", linestyle="-", marker="s",
-            color="#e74c3c"),
+    3: dict(label="With UAV (K=3)", linestyle="-", marker="D",
+            color="#8e44ad"),
 }
 
 

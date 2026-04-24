@@ -36,7 +36,7 @@ from exp_fleet_vs_demand import generate_static_requests, solve_once
 
 # === Experiment Parameters ===
 TW_VALUES = [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
-NUM_UAV_LIST = [0, 1]
+NUM_UAV_LIST = [0, 1, 2, 3]
 SEED = 42
 N_REQUESTS = 20
 NUM_MCS_SLOW = 3
@@ -153,7 +153,11 @@ def plot(rows: list) -> None:
         0: dict(label="Baseline (No UAV)", linestyle="--", marker="o",
                 color="#7f8c8d"),
         1: dict(label="With UAV (K=1)", linestyle="-", marker="s",
+                color="#f39c12"),
+        2: dict(label="With UAV (K=2)", linestyle="-", marker="^",
                 color="#e74c3c"),
+        3: dict(label="With UAV (K=3)", linestyle="-", marker="D",
+                color="#8e44ad"),
     }
 
     fig, ax = plt.subplots(figsize=(6, 4))
