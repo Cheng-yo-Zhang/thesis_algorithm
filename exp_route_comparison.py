@@ -120,6 +120,7 @@ def run_single_experiment(n_demand, seed=42):
 # ================================================================
 def main():
     demand_levels = [10, 20, 30, 40, 50, 60, 70, 80]
+    target_n_for_curve = 60
     seed = 42
     out_dir = Path("output/route_comparison")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -131,6 +132,7 @@ def main():
     print("=" * 70)
 
     all_metrics = {name: [] for name in algo_names}
+    solutions_at_target = None
 
     for n_demand in demand_levels:
         t0 = time.time()
@@ -139,6 +141,9 @@ def main():
         print(f"{'─'*50}")
 
         solutions, problem = run_single_experiment(n_demand, seed)
+
+        if n_demand == target_n_for_curve:
+            solutions_at_target = solutions
 
         for name in algo_names:
             m = get_metrics(solutions[name])
@@ -199,28 +204,58 @@ def main():
     print(f"  [Saved] {path}")
 
     # ==============================================================
-    #  圖 B2: Served Count vs Last Completion Time (efficiency view)
+    #  圖 B2: Served Count vs Last Completion Time (固定 N = 60)
+    #  y 軸里程碑 = {10, 20, 30, 40, 50, 60}
+    #  x 軸 = 該演算法服務到第 k 個客戶的時間
+    #  每個演算法一條折線；upper-left = better
     # ==============================================================
-    fig, ax = plt.subplots(figsize=(9, 5.5))
-    for name in algo_names:
-        dep = [m['last_dep'] for m in all_metrics[name]]
-        srv = [m['served'] for m in all_metrics[name]]
-        ax.plot(dep, srv,
-                marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
-                linewidth=2, markersize=8, label=name, zorder=5)
+    milestones = [10, 20, 30, 40, 50, 60]
+    if solutions_at_target is None:
+        print(f"  [Warning] No solutions captured at N={target_n_for_curve}; "
+              f"skipping efficiency plot.")
+    else:
+        fig, ax = plt.subplots(figsize=(9, 5.5))
+        for name in algo_names:
+            sol = solutions_at_target[name]
+            completion_times = []
+            for r in sol.get_all_routes():
+                completion_times.extend(r.departure_times)
+            completion_times.sort()
+            served = len(completion_times)
 
-    ax.set_xlabel('Last Completion Time (min)', fontsize=12)
-    ax.set_ylabel('Served Customers', fontsize=12)
-    ax.set_title('Throughput vs Completion Time\n'
-                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]  Upper-left = better',
-                 fontsize=13, fontweight='bold')
-    ax.legend(fontsize=11, loc='lower right')
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    path = out_dir / "fig_served_vs_completion_time.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  [Saved] {path}")
+            xs, ys = [], []
+            for k in milestones:
+                if k <= served:
+                    xs.append(completion_times[k - 1])
+                    ys.append(k)
+            # 加上實際終點 (若不重複於最後一個里程碑)
+            if served > 0 and (not ys or ys[-1] != served):
+                xs.append(completion_times[-1])
+                ys.append(served)
+            if not xs:
+                continue
+
+            ax.plot(xs, ys,
+                    marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
+                    linewidth=2, markersize=8,
+                    label=f"{name} (served {served})", zorder=5)
+
+        ax.set_xlabel('Last Completion Time (min)', fontsize=12)
+        ax.set_ylabel('Served Customers', fontsize=12)
+        ax.set_title(f'Throughput vs Completion Time  '
+                     f'[N = {target_n_for_curve}, '
+                     f'Fleet: 3 SLOW + 2 FAST + 1 UAV]\n'
+                     f'Upper-left = better',
+                     fontsize=13, fontweight='bold')
+        ax.set_yticks(milestones)
+        ax.set_ylim(milestones[0] - 5, milestones[-1] + 5)
+        ax.legend(fontsize=11, loc='lower right')
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        path = out_dir / "fig_served_vs_completion_time.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  [Saved] {path}")
 
     # ==============================================================
     #  彙總表
