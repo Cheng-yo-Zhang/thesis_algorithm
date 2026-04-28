@@ -25,7 +25,7 @@ from alns import ALNSSolver
 REQUEST_COUNTS = [10, 20, 30, 40, 50, 60, 70, 80]
 NUM_REPLICATIONS = 10
 BASE_SEED = 42
-OUTPUT_DIR = Path("results_fleet_vs_demand")
+OUTPUT_DIR = Path("results") / "fleet_vs_demand"
 
 STRATEGIES = [
     {"name": "Greedy (EDF)",    "construction": "edf",     "alns_iter": 0},

@@ -12,7 +12,7 @@ Sweep:
     NUM_UAV       ∈ [0, 4]     → two lines on the plot
 
 Output:
-    results_uav_vs_urgent_ratio/urgent_miss_rate.png
+    results/uav_vs_urgent_ratio/urgent_miss_rate.png
 """
 
 import time
@@ -39,7 +39,7 @@ NUM_MCS_SLOW = 3
 NUM_MCS_FAST = 2
 ALNS_ITER = 5000
 
-OUTPUT_DIR = Path("results_uav_vs_urgent_ratio")
+OUTPUT_DIR = Path("results") / "uav_vs_urgent_ratio"
 STRATEGY = {"construction": "regret2", "alns_iter": ALNS_ITER}
 
 

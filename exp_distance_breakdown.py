@@ -11,8 +11,8 @@ Compare NN / Greedy / ALNS on:
     total travel distance split by vehicle type (Slow / Fast / UAV)
 
 Output:
-    results_distance_breakdown/raw.csv
-    results_distance_breakdown/fig_distance_breakdown_by_type.png
+    results/distance_breakdown/raw.csv
+    results/distance_breakdown/fig_distance_breakdown_by_type.png
 """
 
 import csv
@@ -38,7 +38,7 @@ TYPE_COLORS = {
     'uav':  '#1E88E5',
 }
 
-OUTPUT_DIR = Path("results_distance_breakdown")
+OUTPUT_DIR = Path("results") / "distance_breakdown"
 
 
 # ================================================================

@@ -16,7 +16,7 @@ Each TW value sets BOTH URGENT_TW_MIN and URGENT_TW_MAX to the same value,
 so every urgent request gets exactly that time window (no sampling noise).
 
 Output:
-    results_uav_vs_tw/urgent_miss_rate.png
+    results/uav_vs_tw/urgent_miss_rate.png
 """
 
 import time
@@ -44,7 +44,7 @@ NUM_MCS_FAST = 2
 URGENT_RATIO = 0.5
 ALNS_ITER = 5000
 
-OUTPUT_DIR = Path("results_uav_vs_tw")
+OUTPUT_DIR = Path("results") / "uav_vs_tw"
 STRATEGY = {"construction": "regret2", "alns_iter": ALNS_ITER}
 
 

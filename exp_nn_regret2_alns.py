@@ -8,9 +8,8 @@ Strategies  : NN | Regret-2 | Regret-2 + ALNS  (ALNS uses Regret-2 as initial)
 Demand grid : [10, 20, 30, 40, 50, 60, 70, 80]
 Replications: 10 seeds
 
-Outputs (saved to a *new* folder so the original Greedy/Regret-2/ALNS
-results in results_coverage_vs_demand/ remain untouched):
-    results_nn_regret2_alns/
+Outputs:
+    results/nn_regret2_alns/
         nn_regret2_alns.csv
         coverage_vs_demand.png
         last_completion_time_vs_demand.png
@@ -33,7 +32,7 @@ from alns import ALNSSolver
 # ── Experiment settings ──────────────────────────────────────────
 DEMAND_LEVELS = [10, 20, 30, 40, 50, 60, 70, 80]
 NUM_SEEDS = 10
-OUTPUT_DIR = Path("results_nn_regret2_alns")   # NEW folder, does not overwrite
+OUTPUT_DIR = Path("results") / "nn_regret2_alns"
 
 # Fixed fleet
 NUM_MCS_SLOW = 3

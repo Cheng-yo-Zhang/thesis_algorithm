@@ -23,7 +23,7 @@ from alns import ALNSSolver
 # ── Experiment settings ──────────────────────────────────────────
 DEMAND_LEVELS = [10, 20, 30, 40, 50, 60]
 NUM_SEEDS = 10
-OUTPUT_DIR = Path("results_coverage_vs_demand")
+OUTPUT_DIR = Path("results") / "coverage_vs_demand"
 
 # Fixed fleet
 NUM_MCS_SLOW = 3

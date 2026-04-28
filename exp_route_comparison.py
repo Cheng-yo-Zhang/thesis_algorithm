@@ -123,7 +123,7 @@ def main():
     demand_levels = [10, 20, 30, 40, 50, 60, 70, 80]
     target_n_for_curve = 60
     seed = 42
-    out_dir = Path("output/route_comparison")
+    out_dir = Path("results") / "route_comparison"
     out_dir.mkdir(parents=True, exist_ok=True)
     algo_names = ['NN', 'Greedy', 'ALNS']
 

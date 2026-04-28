@@ -28,7 +28,7 @@ from simulation import initialize_fleet
 N_VALUES = [10, 20, 30, 40, 50, 60, 70, 80]
 NUM_REPLICATIONS = 10
 BASE_SEED = 42
-OUTPUT_DIR = Path("results_algorithm_comparison")
+OUTPUT_DIR = Path("results") / "algorithm_comparison"
 
 NUM_MCS_SLOW = 5
 NUM_MCS_FAST = 5
