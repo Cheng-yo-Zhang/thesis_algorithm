@@ -55,11 +55,10 @@ refactor/static-single-batch 重構成 static 版本（論文主開發線）
 
 ### 待確認決策
 
-1. **Regret-2 是否保留？**（目前 5 個 static 實驗使用）
-2. **ALNS 初始解是否統一用 EDF？**（影響 5 個實驗數值）
-3. **`experiment.py` 單檔 vs `experiments/` 資料夾？**
-4. **`fig_served_vs_completion_time.png` 是新圖還是現有圖別名？**
-5. **UAV 服務後的殘餘需求處理**：(a) 不服務 demand>20kWh / (b) 殘餘交給 MCS？
+1. **Regret-2 不保留？**（目前 5 個 static 實驗使用）
+2. **ALNS 初始解統一用 EDF**（影響 5 個實驗數值）
+3. **`experiment.py` 單檔，圖片存到results**
+4. **`fig_served_vs_completion_time.png` 是新圖**
 
 ## 五階段執行計畫
 

@@ -1,15 +1,14 @@
 """
-Greedy vs Sweep+R2 vs ALNS 路徑圖 + 效能指標比較實驗
+NN vs Greedy vs ALNS 路徑圖 + 效能指標比較實驗
 =====================================================
 單次批次調度 (無 Rolling Horizon)
 車隊: 3 MCS-SLOW + 2 MCS-FAST + 1 UAV
 需求: 10, 20, 30, 40, 50, 60, 70, 80
 
 演算法:
-  1. Greedy — Greedy Insertion (baseline)
-  2. Sweep+R2 — Sweep 分區 + Regret-2
-  3. ALNS(S) — Sweep+R2 初始解 → ALNS 5000 iter
-  (4. ALNS(G) — 預留，可後續啟用)
+  1. NN     — Nearest-Neighbor Chain
+  2. Greedy — Greedy Insertion (baseline)
+  3. ALNS   — Greedy 初始解 → ALNS 5000 iter
 """
 
 import numpy as np
@@ -75,6 +74,9 @@ def get_metrics(sol):
 #  單次實驗
 # ================================================================
 def run_single_experiment(n_demand, seed=42):
+    # 注意: 此實驗直接呼叫 greedy_insertion_construction / nearest_neighbor_construction，
+    # 因此 CONSTRUCTION_STRATEGY 僅作為 greedy 的排序鍵；保留 "regret2" 以維持原本
+    # "due_date 唯一鍵" 行為 (與舊版 fallback 排序完全一致)。
     cfg = Config(
         RANDOM_SEED=seed, USE_FIXED_DEMAND=True,
         FIXED_DEMAND_PER_SLOT=n_demand,

@@ -27,7 +27,7 @@ BASE_SEED = 42
 OUTPUT_DIR = Path("results_algorithm_comparison")
 
 STRATEGIES = [
-    {"name": "Greedy (Deadline)", "construction": "deadline", "alns_iter": 0},
+    {"name": "Greedy (EDF)",    "construction": "edf",     "alns_iter": 0},
     {"name": "Regret-2",        "construction": "regret2", "alns_iter": 0},
     {"name": "Regret-2 + ALNS", "construction": "regret2", "alns_iter": 5000},
 ]
@@ -165,12 +165,12 @@ def plot_results(results):
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
     colors = {
-        "Greedy (Deadline)": "#7f8c8d",
+        "Greedy (EDF)": "#7f8c8d",
         "Regret-2": "#3498db",
         "Regret-2 + ALNS": "#e74c3c",
     }
     markers = {
-        "Greedy (Deadline)": "s",
+        "Greedy (EDF)": "s",
         "Regret-2": "^",
         "Regret-2 + ALNS": "o",
     }

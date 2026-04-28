@@ -436,12 +436,9 @@ class ChargingSchedulingProblem:
         c = self.cfg
         solution = Solution(c)
 
-        # 為每台 active vehicle 建立 route (suffix)
         vehicle_route_map: Dict[int, Tuple[str, int]] = {}
 
         for vs in vehicle_states:
-            if not vs.is_active:
-                continue
             route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
             route.start_position = vs.position
             route.start_time = vs.available_time
@@ -458,16 +455,17 @@ class ChargingSchedulingProblem:
             self.evaluate_route(route)
 
         # 排序 — 依策略決定 request 處理順序
-        if c.CONSTRUCTION_STRATEGY == "edf":
+        strategy = c.CONSTRUCTION_STRATEGY
+        if strategy == "edf":
             # Earliest Deadline First — 只看 due_date，不考慮空間/服務時間
             sorted_requests = sorted(
                 active_requests,
                 key=lambda n: (n.due_date, -n.demand)
             )
-        elif c.CONSTRUCTION_STRATEGY == "slack":
+        elif strategy == "slack":
             # Slack-based — 考慮空間可達性與服務時間
             dispatch_time = (dispatch_window_end - c.DELTA_T) if dispatch_window_end else 0.0
-            active_positions = [vs.position for vs in vehicle_states if vs.is_active]
+            active_positions = [vs.position for vs in vehicle_states]
             max_power = max(c.MCS_FAST_POWER, c.MCS_SLOW_POWER)
 
             def _slack(n: Node) -> float:
@@ -482,14 +480,20 @@ class ChargingSchedulingProblem:
                 return n.due_date - (dispatch_time + min_travel + min_service)
 
             sorted_requests = sorted(active_requests, key=lambda n: (_slack(n), n.due_date))
-        elif c.CONSTRUCTION_STRATEGY == "nearest":
+        elif strategy == "nearest":
             sorted_requests = sorted(
                 active_requests,
                 key=lambda n: abs(n.x - self.depot.x) + abs(n.y - self.depot.y)
             )
-        else:
-            # fallback: due_date
+        elif strategy == "regret2":
+            # regret2 走另一條入口 (regret2_insertion_construction)；
+            # 直接呼叫 greedy 時 fallback 為 due_date 排序
             sorted_requests = sorted(active_requests, key=lambda n: n.due_date)
+        else:
+            raise ValueError(
+                f"Unknown CONSTRUCTION_STRATEGY: {strategy!r} "
+                f"(expected one of 'edf', 'slack', 'nearest', 'regret2')"
+            )
         unassigned: List[Node] = []
 
         # Type-Flexible Unified Cost Dispatching
@@ -554,12 +558,6 @@ class ChargingSchedulingProblem:
             if not inserted:
                 unassigned.append(node)
 
-        # Phase 2: Reserve MCS Activation — Section 6.3
-        if unassigned and c.ENABLE_RESERVE_ACTIVATION:
-            unassigned = self._try_reserve_activation(
-                solution, unassigned, vehicle_states
-            )
-
         solution.unassigned_nodes = unassigned
         solution.calculate_total_cost(len(active_requests))
         return solution
@@ -584,8 +582,6 @@ class ChargingSchedulingProblem:
         vehicle_route_map: Dict[int, Tuple[str, int]] = {}
 
         for vs in vehicle_states:
-            if not vs.is_active:
-                continue
             route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
             route.start_position = vs.position
             route.start_time = vs.available_time
@@ -608,12 +604,6 @@ class ChargingSchedulingProblem:
         unassigned: List[Node] = []
         unassigned += self._regret2_insert_pool(solution, urgent_pool, dispatch_window_end)
         unassigned += self._regret2_insert_pool(solution, normal_pool, dispatch_window_end)
-
-        # Reserve MCS Activation
-        if unassigned and c.ENABLE_RESERVE_ACTIVATION:
-            unassigned = self._try_reserve_activation(
-                solution, unassigned, vehicle_states
-            )
 
         solution.unassigned_nodes = unassigned
         solution.calculate_total_cost(len(active_requests))
@@ -704,398 +694,6 @@ class ChargingSchedulingProblem:
 
         return unassigned
 
-    # ==================== Sweep + Regret-2 Construction ====================
-    # ==================== Clarke-Wright Savings Construction ====================
-    def savings_construction(
-        self,
-        active_requests: List[Node],
-        vehicle_states: List[VehicleState],
-        dispatch_window_end: float = None
-    ) -> Solution:
-        """
-        Clarke-Wright Savings Algorithm (adapted for VRPTW + multi-type fleet)
-
-        Phase 1: 每個客戶一條虛擬路徑
-        Phase 2: 計算 savings 並由大到小合併
-        Phase 3: 分配車型 (SLOW 優先, FAST 補位)
-        Phase 4: UAV fallback (urgent only)
-        """
-        c = self.cfg
-        solution = Solution(c)
-
-        mcs_states = [vs for vs in vehicle_states if vs.is_active and vs.vehicle_type != 'uav']
-        uav_states = [vs for vs in vehicle_states if vs.is_active and vs.vehicle_type == 'uav']
-        n_mcs = len(mcs_states)
-
-        # 建立 UAV 空路徑
-        for vs in uav_states:
-            route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            solution.add_uav_route(route)
-            self.evaluate_route(route)
-
-        if n_mcs == 0 or not active_requests:
-            solution.unassigned_nodes = list(active_requests)
-            solution.calculate_total_cost(len(active_requests))
-            return solution
-
-        depot = self.depot
-        requests = list(active_requests)
-
-        # --- Phase 1: 每個客戶一條虛擬路徑 (chain list) ---
-        # route_of[node.id] = route_index
-        # routes = list of lists of nodes
-        routes = [[node] for node in requests]
-        route_of = {}
-        for r_idx, r in enumerate(routes):
-            route_of[r[0].id] = r_idx
-
-        # --- Phase 2: 計算 savings ---
-        savings_list = []
-        for i, ni in enumerate(requests):
-            d_depot_i = abs(depot.x - ni.x) + abs(depot.y - ni.y)  # manhattan
-            for j, nj in enumerate(requests):
-                if i >= j:
-                    continue
-                d_depot_j = abs(depot.x - nj.x) + abs(depot.y - nj.y)
-                d_ij = abs(ni.x - nj.x) + abs(ni.y - nj.y)
-                sav = d_depot_i + d_depot_j - d_ij
-                if sav > 0:
-                    savings_list.append((sav, ni.id, nj.id))
-
-        savings_list.sort(key=lambda x: -x[0])
-
-        # --- Phase 3: 合併路徑 ---
-        # 合併條件: i 在某路徑尾端, j 在另一路徑首端 (或反過來), 合併後可行
-        for sav, id_i, id_j in savings_list:
-            ri = route_of.get(id_i)
-            rj = route_of.get(id_j)
-            if ri is None or rj is None or ri == rj:
-                continue
-
-            route_i = routes[ri]
-            route_j = routes[rj]
-            if route_i is None or route_j is None:
-                continue
-
-            # 嘗試合併: route_i + route_j (i 在尾, j 在首)
-            merged = None
-            if route_i[-1].id == id_i and route_j[0].id == id_j:
-                merged = route_i + route_j
-            elif route_j[-1].id == id_j and route_i[0].id == id_i:
-                merged = route_j + route_i
-            elif route_i[-1].id == id_i and route_j[-1].id == id_j:
-                merged = route_i + route_j[::-1]
-            elif route_i[0].id == id_i and route_j[0].id == id_j:
-                merged = route_i[::-1] + route_j
-
-            if merged is None:
-                continue
-
-            # 檢查合併後是否可行 (用最快車型 MCS-FAST 檢查上界)
-            test_route = Route(vehicle_type='mcs_fast', vehicle_id=0)
-            test_route.start_position = depot
-            test_route.start_time = 0.0
-            test_route.start_energy = c.MCS_CAPACITY
-            test_route.nodes = list(merged)
-            test_route.total_demand = sum(n.demand for n in merged)
-
-            if self.evaluate_route(test_route):
-                # 合併可行
-                routes[ri] = merged
-                routes[rj] = None
-                for node in merged:
-                    route_of[node.id] = ri
-            # 不可行就跳過, 不合併
-
-        # 收集非空路徑
-        valid_routes = [r for r in routes if r is not None]
-
-        # 按節點數由多到少排序 (大路徑優先分配)
-        valid_routes.sort(key=lambda r: -len(r))
-
-        # --- Phase 4: 分配到實際 MCS 車輛 ---
-        # SLOW 優先, 時間窗不夠才用 FAST
-        slow_states = [vs for vs in mcs_states if vs.vehicle_type == 'mcs_slow']
-        fast_states = [vs for vs in mcs_states if vs.vehicle_type == 'mcs_fast']
-        ordered_states = slow_states + fast_states
-
-        assigned_nodes = set()
-        for vs in ordered_states:
-            route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            solution.add_mcs_route(route)
-            self.evaluate_route(route)
-
-        # 貪婪分配: 每條合併路徑嘗試放入最適合的 MCS
-        for chain in valid_routes:
-            best_mcs_idx = -1
-            best_cost = float('inf')
-
-            for m_idx, mcs_route in enumerate(solution.mcs_routes):
-                if len(mcs_route.nodes) > 0:
-                    continue  # 已被佔用
-
-                # 嘗試整條 chain 放入
-                test = mcs_route.copy()
-                test.nodes = list(chain)
-                test.total_demand = sum(n.demand for n in chain)
-                if self.evaluate_route(test):
-                    if test.total_time < best_cost:
-                        best_cost = test.total_time
-                        best_mcs_idx = m_idx
-
-            if best_mcs_idx >= 0:
-                target = solution.mcs_routes[best_mcs_idx]
-                target.nodes = list(chain)
-                target.total_demand = sum(n.demand for n in chain)
-                self.evaluate_route(target)
-                for node in chain:
-                    node.status = 'assigned'
-                    assigned_nodes.add(node.id)
-            else:
-                # 整條 chain 放不進任何空車 → 逐一插入
-                for node in chain:
-                    if node.id in assigned_nodes:
-                        continue
-                    inserted = False
-                    best_r = -1
-                    best_p = -1
-                    min_cost = float('inf')
-                    for m_idx, mcs_route in enumerate(solution.mcs_routes):
-                        for pos in range(len(mcs_route.nodes) + 1):
-                            feasible, delta = self.incremental_insertion_check(mcs_route, pos, node)
-                            if feasible:
-                                bonus = self._get_type_preference_bonus(mcs_route.vehicle_type, node, dispatch_window_end)
-                                adj = delta - bonus
-                                if adj < min_cost:
-                                    min_cost = adj
-                                    best_r = m_idx
-                                    best_p = pos
-
-                    if best_r >= 0:
-                        target = solution.mcs_routes[best_r]
-                        target.insert_node(best_p, node)
-                        if self.evaluate_route(target):
-                            node.status = 'assigned'
-                            assigned_nodes.add(node.id)
-                            inserted = True
-                        else:
-                            target.remove_node(best_p)
-                            self.evaluate_route(target)
-
-        # 收集未分配的
-        unassigned = [n for n in requests if n.id not in assigned_nodes]
-
-        # 未分配的再做一輪全域 greedy insertion
-        still_unassigned = []
-        for node in unassigned:
-            best_r = -1
-            best_p = -1
-            min_cost = float('inf')
-            for m_idx, mcs_route in enumerate(solution.mcs_routes):
-                for pos in range(len(mcs_route.nodes) + 1):
-                    feasible, delta = self.incremental_insertion_check(mcs_route, pos, node)
-                    if feasible:
-                        bonus = self._get_type_preference_bonus(mcs_route.vehicle_type, node, dispatch_window_end)
-                        adj = delta - bonus
-                        if adj < min_cost:
-                            min_cost = adj
-                            best_r = m_idx
-                            best_p = pos
-
-            if best_r >= 0:
-                target = solution.mcs_routes[best_r]
-                target.insert_node(best_p, node)
-                if self.evaluate_route(target):
-                    node.status = 'assigned'
-                else:
-                    target.remove_node(best_p)
-                    self.evaluate_route(target)
-                    still_unassigned.append(node)
-            else:
-                still_unassigned.append(node)
-
-        # --- Phase 5: UAV fallback (urgent only) ---
-        final_unassigned = []
-        for node in still_unassigned:
-            if (node.node_type == 'urgent'
-                    and self.compute_uav_delivery(node) > 0
-                    and not node.uav_served):
-                inserted = False
-                for route in solution.uav_routes:
-                    for pos in range(len(route.nodes) + 1):
-                        feasible, delta = self.incremental_insertion_check(route, pos, node)
-                        if feasible:
-                            route.insert_node(pos, node)
-                            if self.evaluate_route(route):
-                                node.status = 'assigned'
-                                inserted = True
-                                break
-                            else:
-                                route.remove_node(pos)
-                                self.evaluate_route(route)
-                    if inserted:
-                        break
-                if not inserted:
-                    final_unassigned.append(node)
-            else:
-                final_unassigned.append(node)
-
-        solution.unassigned_nodes = final_unassigned
-        solution.calculate_total_cost(len(active_requests))
-        return solution
-
-    # ==================== Sweep + Regret-2 Construction ====================
-    def sweep_regret2_construction(
-        self,
-        active_requests: List[Node],
-        vehicle_states: List[VehicleState],
-        dispatch_window_end: float = None
-    ) -> Solution:
-        """
-        Sweep + Regret-2 Construction
-
-        Phase 1: 以 depot 為圓心，按極角將客戶分配到 MCS 扇區
-        Phase 2: 每個扇區內用 Regret-2 決定插入順序
-        Phase 3: MCS 無法服務的 urgent → UAV fallback
-        """
-        import math
-        c = self.cfg
-        solution = Solution(c)
-
-        # --- 建立空路徑 ---
-        mcs_states = [vs for vs in vehicle_states if vs.is_active and vs.vehicle_type != 'uav']
-        uav_states = [vs for vs in vehicle_states if vs.is_active and vs.vehicle_type == 'uav']
-
-        for vs in mcs_states:
-            route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            route.is_deployed = len(vs.committed_nodes) > 0
-            solution.add_mcs_route(route)
-            self.evaluate_route(route)
-
-        for vs in uav_states:
-            route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            route.is_deployed = len(vs.committed_nodes) > 0
-            solution.add_uav_route(route)
-            self.evaluate_route(route)
-
-        n_mcs = len(solution.mcs_routes)
-        if n_mcs == 0:
-            solution.unassigned_nodes = list(active_requests)
-            solution.calculate_total_cost(len(active_requests))
-            return solution
-
-        # --- Phase 1: Sweep 分區 ---
-        depot_x, depot_y = self.depot.x, self.depot.y
-
-        # 計算極角並排序
-        def polar_angle(node):
-            return math.atan2(node.y - depot_y, node.x - depot_x)
-
-        sorted_by_angle = sorted(active_requests, key=polar_angle)
-
-        # 均分到 MCS 扇區
-        clusters = [[] for _ in range(n_mcs)]
-        for i, node in enumerate(sorted_by_angle):
-            clusters[i % n_mcs].append(node)
-
-        # --- Phase 2: 每個扇區內用 Regret-2 插入 (優先插入本扇區路徑) ---
-        spillover = []  # 本扇區塞不下的節點
-        for cluster_idx, cluster_nodes in enumerate(clusters):
-            route = solution.mcs_routes[cluster_idx]
-
-            urgent_nodes = [n for n in cluster_nodes if n.node_type == 'urgent']
-            normal_nodes = [n for n in cluster_nodes if n.node_type == 'normal']
-
-            for pool in [urgent_nodes, normal_nodes]:
-                remaining = list(pool)
-                while remaining:
-                    best_node = None
-                    best_node_idx = -1
-                    best_pos = -1
-                    best_priority = None
-
-                    for n_idx, node in enumerate(remaining):
-                        options = []
-                        for pos in range(len(route.nodes) + 1):
-                            feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
-                            if feasible:
-                                bonus = self._get_type_preference_bonus(route.vehicle_type, node, dispatch_window_end)
-                                options.append((delta_cost - bonus, pos))
-
-                        if not options:
-                            continue
-
-                        options.sort(key=lambda x: x[0])
-                        best_cost = options[0][0]
-                        second_best = options[1][0] if len(options) > 1 else float('inf')
-                        regret = second_best - best_cost
-                        priority = (regret, -node.due_date, -best_cost)
-
-                        if best_priority is None or priority > best_priority:
-                            best_priority = priority
-                            best_node = node
-                            best_node_idx = n_idx
-                            best_pos = options[0][1]
-
-                    if best_node is None:
-                        spillover.extend(remaining)
-                        break
-
-                    route.insert_node(best_pos, best_node)
-                    if self.evaluate_route(route):
-                        best_node.status = 'assigned'
-                    else:
-                        route.remove_node(best_pos)
-                        self.evaluate_route(route)
-                        spillover.append(best_node)
-
-                    remaining.pop(best_node_idx)
-
-        # --- Phase 2b: 跨區 Regret-2 — 溢出節點搜尋所有 MCS 路徑 ---
-        unassigned = self._regret2_insert_pool(solution, spillover, dispatch_window_end)
-
-        # --- Phase 3: UAV fallback (urgent only) ---
-        still_unassigned = []
-        for node in unassigned:
-            if (node.node_type == 'urgent'
-                    and self.compute_uav_delivery(node) > 0
-                    and not node.uav_served):
-                inserted = False
-                for r_idx, route in enumerate(solution.uav_routes):
-                    for pos in range(len(route.nodes) + 1):
-                        feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
-                        if feasible:
-                            route.insert_node(pos, node)
-                            if self.evaluate_route(route):
-                                node.status = 'assigned'
-                                inserted = True
-                                break
-                            else:
-                                route.remove_node(pos)
-                                self.evaluate_route(route)
-                    if inserted:
-                        break
-                if not inserted:
-                    still_unassigned.append(node)
-            else:
-                still_unassigned.append(node)
-
-        solution.unassigned_nodes = still_unassigned
-        solution.calculate_total_cost(len(active_requests))
-        return solution
-
     # ==================== Nearest-Neighbor Chain Construction ====================
     def nearest_neighbor_construction(
         self,
@@ -1112,10 +710,7 @@ class ChargingSchedulingProblem:
         c = self.cfg
         solution = Solution(c)
 
-        # 建立 route for each active vehicle
         for vs in vehicle_states:
-            if not vs.is_active:
-                continue
             route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
             route.start_position = vs.position
             route.start_time = vs.available_time
@@ -1193,57 +788,6 @@ class ChargingSchedulingProblem:
             return abs(from_node.x - to_node.x) + abs(from_node.y - to_node.y)
         else:
             return np.sqrt((from_node.x - to_node.x)**2 + (from_node.y - to_node.y)**2)
-
-    def _try_reserve_activation(
-        self,
-        solution: Solution,
-        unassigned: List[Node],
-        vehicle_states: List[VehicleState]
-    ) -> List[Node]:
-        """
-        Reserve MCS Activation (algorithm.md Section 6.3)
-
-        對每個 unassigned 請求, 嘗試從 depot 啟用一台 reserve MCS。
-        """
-        c = self.cfg
-
-        # 找出所有 reserve vehicles
-        reserve_pool = [vs for vs in vehicle_states if not vs.is_active]
-        still_unassigned: List[Node] = []
-
-        for node in unassigned:
-            activated = False
-
-            for vs in reserve_pool:
-                # 建立 candidate route
-                candidate_route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-                candidate_route.start_position = vs.position  # depot
-                candidate_route.start_time = vs.available_time
-                candidate_route.start_energy = vs.remaining_energy
-                candidate_route.insert_node(0, node)
-
-                if self.evaluate_route(candidate_route):
-                    # 確認 depot-reachability (evaluate_route 已內含)
-                    node.status = 'assigned'
-                    activated = True
-
-                    # 加入 solution
-                    if vs.vehicle_type == 'uav':
-                        solution.add_uav_route(candidate_route)
-                    else:
-                        solution.add_mcs_route(candidate_route)
-
-                    # 啟用 reserve vehicle
-                    vs.is_active = True
-                    reserve_pool.remove(vs)
-                    print(f"    Reserve activated: {vs.vehicle_type}-{vs.vehicle_id} "
-                          f"for request {node.id}")
-                    break
-
-            if not activated:
-                still_unassigned.append(node)
-
-        return still_unassigned
 
     def print_config(self) -> None:
         c = self.cfg

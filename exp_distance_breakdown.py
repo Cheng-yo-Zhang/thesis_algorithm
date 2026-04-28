@@ -5,8 +5,7 @@ Fixed:
     N            = 50 customers (static batch)
     fleet        = 3 Slow + 2 Fast + 1 UAV
     seed         = 42 (single replication)
-    construction = Regret-2
-    ALNS iter    = 5000 (Greedy + ALNS)
+    ALNS iter    = 5000 (ALNS uses Greedy-EDF as the initial solution)
 
 Compare NN / Greedy / ALNS on:
     total travel distance split by vehicle type (Slow / Fast / UAV)

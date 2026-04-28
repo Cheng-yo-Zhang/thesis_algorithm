@@ -14,7 +14,7 @@ def initialize_fleet(cfg: Config, depot: Node) -> List[VehicleState]:
         fleet.append(VehicleState(
             vehicle_id=vid, vehicle_type='mcs_slow',
             position=depot, available_time=0.0,
-            remaining_energy=cfg.MCS_CAPACITY, is_active=True
+            remaining_energy=cfg.MCS_CAPACITY,
         ))
         vid += 1
 
@@ -22,7 +22,7 @@ def initialize_fleet(cfg: Config, depot: Node) -> List[VehicleState]:
         fleet.append(VehicleState(
             vehicle_id=vid, vehicle_type='mcs_fast',
             position=depot, available_time=0.0,
-            remaining_energy=cfg.MCS_CAPACITY, is_active=True
+            remaining_energy=cfg.MCS_CAPACITY,
         ))
         vid += 1
 
@@ -30,27 +30,9 @@ def initialize_fleet(cfg: Config, depot: Node) -> List[VehicleState]:
         fleet.append(VehicleState(
             vehicle_id=vid, vehicle_type='uav',
             position=depot, available_time=0.0,
-            remaining_energy=cfg.UAV_DELIVERABLE_ENERGY, is_active=True
+            remaining_energy=cfg.UAV_DELIVERABLE_ENERGY,
         ))
         vid += 1
-
-    # Reserve pool — 只在啟用 reserve 機制時建立
-    if cfg.ENABLE_RESERVE_ACTIVATION:
-        for i in range(cfg.RESERVE_MCS_SLOW_MAX):
-            fleet.append(VehicleState(
-                vehicle_id=vid, vehicle_type='mcs_slow',
-                position=depot, available_time=0.0,
-                remaining_energy=cfg.MCS_CAPACITY, is_active=False
-            ))
-            vid += 1
-
-        for i in range(cfg.RESERVE_MCS_FAST_MAX):
-            fleet.append(VehicleState(
-                vehicle_id=vid, vehicle_type='mcs_fast',
-                position=depot, available_time=0.0,
-                remaining_energy=cfg.MCS_CAPACITY, is_active=False
-            ))
-            vid += 1
 
     return fleet
 
@@ -77,9 +59,6 @@ def simulate_slot_execution(
         route_map[r.vehicle_id] = r
 
     for vs in vehicle_states:
-        if not vs.is_active:
-            continue
-
         route = route_map.get(vs.vehicle_id)
         if route is None or len(route.nodes) == 0:
             # 閒置車輛: 不移動
@@ -166,9 +145,6 @@ def simulate_dispatch_window(
         route_map[r.vehicle_id] = r
 
     for vs in vehicle_states:
-        if not vs.is_active:
-            continue
-
         route = route_map.get(vs.vehicle_id)
         if route is None or len(route.nodes) == 0:
             vs.available_time = max(vs.available_time, execution_end_time)

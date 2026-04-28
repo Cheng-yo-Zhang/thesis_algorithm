@@ -41,7 +41,6 @@ class VehicleState:
     position: Node              # release_node: 完成當前承諾任務後所在節點
     available_time: float       # release_time: 最早可再接受新任務的時間
     remaining_energy: float     # release_energy: 剩餘能量 (kWh)
-    is_active: bool = True      # True=已啟用, False=reserve (depot 待命)
     committed_nodes: List = field(default_factory=list)  # frozen-prefix 中已承諾的節點
     committed_departures: List = field(default_factory=list)  # 每個 committed node 的預計 departure time
 

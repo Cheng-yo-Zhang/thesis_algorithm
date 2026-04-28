@@ -51,7 +51,6 @@ def make_cfg(demand: int, seed: int) -> Config:
         FIXED_DEMAND_PER_SLOT=demand,
         USE_FIXED_DEMAND=True,
         MCS_UNLIMITED_ENERGY=True,
-        ENABLE_RESERVE_ACTIVATION=False,
         ALNS_MAX_ITERATIONS=1000,
         SA_COOLING_RATE=0.9954,       # T drops to ~1% at iter 1000
     )

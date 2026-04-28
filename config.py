@@ -139,11 +139,6 @@ class Config:
     LAMBDA_BALANCE: float = 5.0          # ALNS load-aware penalty 權重 (內部用)
     ENABLE_CROSS_FLEET_LS: bool = False  # Cross-fleet local search
 
-    # === Reserve MCS ===
-    ENABLE_RESERVE_ACTIVATION: bool = False  # 是否啟用 reserve MCS
-    RESERVE_MCS_SLOW_MAX: int = 0
-    RESERVE_MCS_FAST_MAX: int = 0
-
     def get_arrival_rate_profile(self, t: float) -> float:
         """取得時刻 t 的到達率輪廓 r(t)；HPP 模式下恆為 1.0"""
         if self.USE_HPP:
