@@ -81,13 +81,6 @@ def run() -> list:
             f"total={m['distance']:6.1f} km"
         )
 
-    csv_path = OUTPUT_DIR / "raw.csv"
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"\nCSV saved: {csv_path}")
-
     return rows
 
 
