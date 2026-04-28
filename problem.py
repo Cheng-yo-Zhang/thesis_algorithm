@@ -1,6 +1,6 @@
 import numpy as np
 import random
-from typing import List, Set, Tuple, Dict, Optional
+from typing import List, Tuple, Optional
 
 from config import Config
 from models import Node, VehicleState, Route, Solution, DistanceMatrix
@@ -15,7 +15,6 @@ class ChargingSchedulingProblem:
 
         self.nodes: List[Node] = []
         self.depot: Node = None
-        self.uav_eligible_ids: Set[int] = set()
         self.dist_matrix: Optional[DistanceMatrix] = None
         self._next_node_id: int = 1
 
@@ -123,12 +122,6 @@ class ChargingSchedulingProblem:
         """設定節點列表並建立距離矩陣"""
         self.nodes = [self.depot] + customer_nodes
         self.dist_matrix = DistanceMatrix(self.nodes)
-        self._compute_uav_eligible()
-
-    def _compute_uav_eligible(self) -> None:
-        """所有客戶皆可由 UAV 服務 (距離限制已取消)"""
-        customers = [n for n in self.nodes if n.node_type != 'depot']
-        self.uav_eligible_ids = {c.id for c in customers}
 
     # ==================== 距離 / 時間計算 ====================
     def calculate_distance(self, node1: Node, node2: Node, distance_type: str = 'euclidean') -> float:
@@ -373,8 +366,7 @@ class ChargingSchedulingProblem:
         return True, delta_waiting
 
     # ==================== Type Preference Bonus ====================
-    def _get_type_preference_bonus(self, vehicle_type: str, node: Node,
-                                     dispatch_window_end: float = None) -> float:
+    def _get_type_preference_bonus(self, vehicle_type: str, node: Node) -> float:
         """
         計算車輛類型偏好獎勵 (分鐘)。用於 unified cost-based construction。
 
@@ -385,10 +377,8 @@ class ChargingSchedulingProblem:
         """
         c = self.cfg
         if vehicle_type == 'mcs_slow':
-            # bonus = Fast 與 Slow 的充電時間差，讓兩者在 adjusted_cost 上對齊
-            # 這樣只要 Slow 能在時間窗內完成，就會優先於 Fast
-            slow_time = (node.demand / c.MCS_SLOW_POWER) * 60.0  # min
-            fast_time = (node.demand / c.MCS_FAST_POWER) * 60.0  # min
+            slow_time = (node.demand / c.MCS_SLOW_POWER) * 60.0
+            fast_time = (node.demand / c.MCS_FAST_POWER) * 60.0
             return slow_time - fast_time
         elif vehicle_type == 'uav':
             if node.node_type == 'urgent':
@@ -404,7 +394,6 @@ class ChargingSchedulingProblem:
         self,
         active_requests: List[Node],
         vehicle_states: List[VehicleState],
-        dispatch_window_end: float = None
     ) -> Solution:
         """
         Type-Flexible Greedy Insertion Construction
@@ -479,7 +468,7 @@ class ChargingSchedulingProblem:
                 for pos in range(len(route.nodes) + 1):
                     feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
                     if feasible:
-                        bonus = self._get_type_preference_bonus(route.vehicle_type, node, dispatch_window_end)
+                        bonus = self._get_type_preference_bonus(route.vehicle_type, node)
                         adjusted_cost = delta_cost - bonus
                         if adjusted_cost < min_adjusted_cost:
                             min_adjusted_cost = adjusted_cost
@@ -495,7 +484,7 @@ class ChargingSchedulingProblem:
                     for pos in range(len(route.nodes) + 1):
                         feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
                         if feasible:
-                            bonus = self._get_type_preference_bonus('uav', node, dispatch_window_end)
+                            bonus = self._get_type_preference_bonus('uav', node)
                             adjusted_cost = delta_cost - bonus
                             if adjusted_cost < min_adjusted_cost:
                                 min_adjusted_cost = adjusted_cost
@@ -537,7 +526,6 @@ class ChargingSchedulingProblem:
         self,
         active_requests: List[Node],
         vehicle_states: List[VehicleState],
-        dispatch_window_end: float = None
     ) -> Solution:
         """
         Priority-Class Regret-2 Insertion Construction
@@ -561,8 +549,8 @@ class ChargingSchedulingProblem:
         normal_pool = [n for n in active_requests if n.node_type == 'normal']
 
         unassigned: List[Node] = []
-        unassigned += self._regret2_insert_pool(solution, urgent_pool, dispatch_window_end)
-        unassigned += self._regret2_insert_pool(solution, normal_pool, dispatch_window_end)
+        unassigned += self._regret2_insert_pool(solution, urgent_pool)
+        unassigned += self._regret2_insert_pool(solution, normal_pool)
 
         solution.unassigned_nodes = unassigned
         solution.calculate_total_cost(len(active_requests))
@@ -572,7 +560,6 @@ class ChargingSchedulingProblem:
         self,
         solution: Solution,
         pool: List[Node],
-        dispatch_window_end: float = None
     ) -> List[Node]:
         """Regret-2 迴圈：對給定 pool 中的節點依 regret 動態排序插入，回傳未能插入的節點。"""
         pool = list(pool)
@@ -592,7 +579,7 @@ class ChargingSchedulingProblem:
                     for pos in range(len(route.nodes) + 1):
                         feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
                         if feasible:
-                            bonus = self._get_type_preference_bonus(route.vehicle_type, node, dispatch_window_end)
+                            bonus = self._get_type_preference_bonus(route.vehicle_type, node)
                             adjusted_cost = delta_cost - bonus
                             options.append((adjusted_cost, 'mcs', r_idx, pos))
 
@@ -604,7 +591,7 @@ class ChargingSchedulingProblem:
                         for pos in range(len(route.nodes) + 1):
                             feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
                             if feasible:
-                                bonus = self._get_type_preference_bonus('uav', node, dispatch_window_end)
+                                bonus = self._get_type_preference_bonus('uav', node)
                                 adjusted_cost = delta_cost - bonus
                                 options.append((adjusted_cost, 'uav', r_idx, pos))
 
@@ -657,7 +644,6 @@ class ChargingSchedulingProblem:
         self,
         active_requests: List[Node],
         vehicle_states: List[VehicleState],
-        dispatch_window_end: float = None
     ) -> Solution:
         """
         Nearest-Neighbor Chain — 從車輛當前位置出發，每次選距離最近的可行請求加到路徑尾端。

@@ -80,22 +80,15 @@ def generate_static_requests(problem: ChargingSchedulingProblem, n: int,
 
 def solve_once(requests, fleet, problem, cfg, strategy):
     """單次調度求解，回傳 solution"""
-    dispatch_window_end = cfg.DELTA_T * 2  # 給予足夠的 dispatch window
-
     if strategy["construction"] == "regret2":
-        solution = problem.regret2_insertion_construction(
-            requests, fleet, dispatch_window_end=dispatch_window_end
-        )
+        solution = problem.regret2_insertion_construction(requests, fleet)
     else:
-        solution = problem.greedy_insertion_construction(
-            requests, fleet, dispatch_window_end=dispatch_window_end
-        )
+        solution = problem.greedy_insertion_construction(requests, fleet)
 
-    # ALNS improvement
     assigned_count = sum(len(r.nodes) for r in solution.get_all_routes())
     if assigned_count > 0 and strategy["alns_iter"] > 0:
         solver = ALNSSolver(problem, cfg)
-        solution = solver.solve(solution, dispatch_window_end=dispatch_window_end)
+        solution = solver.solve(solution)
 
     return solution
 

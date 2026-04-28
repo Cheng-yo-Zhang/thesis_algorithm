@@ -89,7 +89,6 @@ def run_single_experiment(n_demand, seed=42):
     fleet = initialize_fleet(cfg, problem.depot)
     requests = problem.generate_requests()
     problem.setup_nodes(requests)
-    dwe = cfg.DELTA_T
 
     def reset():
         random.seed(seed)
@@ -99,16 +98,16 @@ def run_single_experiment(n_demand, seed=42):
 
     # 1. Greedy
     reset()
-    greedy_sol = problem.greedy_insertion_construction(list(requests), fleet, dwe)
+    greedy_sol = problem.greedy_insertion_construction(list(requests), fleet)
 
     # 2. NN
     reset()
-    nn_sol = problem.nearest_neighbor_construction(list(requests), fleet, dwe)
+    nn_sol = problem.nearest_neighbor_construction(list(requests), fleet)
 
     # 3. ALNS (Greedy 初始解)
     reset()
-    greedy_for_alns = problem.greedy_insertion_construction(list(requests), fleet, dwe)
-    alns_sol = ALNSSolver(problem, cfg).solve(greedy_for_alns, dispatch_window_end=dwe)
+    greedy_for_alns = problem.greedy_insertion_construction(list(requests), fleet)
+    alns_sol = ALNSSolver(problem, cfg).solve(greedy_for_alns)
 
     return {
         'NN': nn_sol,

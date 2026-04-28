@@ -114,7 +114,6 @@ class Solution:
         self.avg_waiting_time_urgent: float = 0.0
         self.avg_waiting_time_normal: float = 0.0
         self.coverage_rate: float = 0.0
-        self.flexibility_score: float = 0.0
         self.unassigned_nodes: List[Node] = []
         self.total_customers: int = 0
         self.is_feasible: bool = False
@@ -198,18 +197,6 @@ class Solution:
         self.is_feasible = len(self.unassigned_nodes) == 0
         return self.total_cost
 
-    def _calculate_flexibility_score(self) -> float:
-        all_routes = self.get_all_routes()
-        if len(all_routes) <= 1:
-            return 0.0
-        loads = [r.total_time for r in all_routes if len(r.nodes) > 0]
-        if len(loads) <= 1:
-            return 0.0
-        mean_load = np.mean(loads)
-        if mean_load == 0:
-            return 0.0
-        return np.std(loads) / mean_load
-
     def copy(self) -> 'Solution':
         new_solution = Solution(self.cfg)
         new_solution.mcs_routes = [r.copy() for r in self.mcs_routes]
@@ -222,7 +209,6 @@ class Solution:
         new_solution.avg_waiting_time_urgent = self.avg_waiting_time_urgent
         new_solution.avg_waiting_time_normal = self.avg_waiting_time_normal
         new_solution.coverage_rate = self.coverage_rate
-        new_solution.flexibility_score = self.flexibility_score
         new_solution.total_customers = self.total_customers
         new_solution.unassigned_nodes = self.unassigned_nodes.copy()
         new_solution.is_feasible = self.is_feasible

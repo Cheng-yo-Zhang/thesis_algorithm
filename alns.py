@@ -34,8 +34,7 @@ class ALNSSolver:
     # ================================================================
     #  主迴圈
     # ================================================================
-    def solve(self, initial_solution: Solution,
-              dispatch_window_end: float = None) -> Solution:
+    def solve(self, initial_solution: Solution) -> Solution:
         cfg = self.cfg
         current = initial_solution.copy()
         best = current.copy()
@@ -95,7 +94,7 @@ class ALNSSolver:
             prev_unassigned = list(candidate.unassigned_nodes)
             candidate.unassigned_nodes = []
             repair_pool = removed + prev_unassigned
-            repair_ops[r_idx](candidate, repair_pool, dispatch_window_end)
+            repair_ops[r_idx](candidate, repair_pool)
             candidate.calculate_total_cost(total_customers)
 
             # Coverage protection
@@ -298,8 +297,7 @@ class ALNSSolver:
     # ================================================================
     #  Repair Operators
     # ================================================================
-    def _greedy_repair(self, solution: Solution, removed: List[Node],
-                       dispatch_window_end: float = None) -> None:
+    def _greedy_repair(self, solution: Solution, removed: List[Node]) -> None:
         uninserted = list(removed)
         random.shuffle(uninserted)
 
@@ -313,7 +311,7 @@ class ALNSSolver:
                         route, pos, node)
                     if feasible:
                         bonus = self.problem._get_type_preference_bonus(
-                            route.vehicle_type, node, dispatch_window_end)
+                            route.vehicle_type, node)
                         load_pen = self._load_penalty(route, solution)
                         adj = delta - bonus + load_pen
                         if best is None or adj < best[0]:
@@ -328,7 +326,7 @@ class ALNSSolver:
                             route, pos, node)
                         if feasible:
                             bonus = self.problem._get_type_preference_bonus(
-                                'uav', node, dispatch_window_end)
+                                'uav', node)
                             load_pen = self._load_penalty(route, solution)
                             adj = delta - bonus + load_pen
                             if best is None or adj < best[0]:
@@ -345,8 +343,7 @@ class ALNSSolver:
 
         solution.unassigned_nodes.extend(still_unassigned)
 
-    def _regret2_repair(self, solution: Solution, removed: List[Node],
-                        dispatch_window_end: float = None) -> None:
+    def _regret2_repair(self, solution: Solution, removed: List[Node]) -> None:
         pool = list(removed)
         still_unassigned = []
 
@@ -365,7 +362,7 @@ class ALNSSolver:
                             route, pos, node)
                         if feasible:
                             bonus = self.problem._get_type_preference_bonus(
-                                route.vehicle_type, node, dispatch_window_end)
+                                route.vehicle_type, node)
                             load_pen = self._load_penalty(route, solution)
                             adj = delta - bonus + load_pen
                             options.append((adj, 'mcs', r_idx, pos))
@@ -379,7 +376,7 @@ class ALNSSolver:
                                 route, pos, node)
                             if feasible:
                                 bonus = self.problem._get_type_preference_bonus(
-                                    'uav', node, dispatch_window_end)
+                                    'uav', node)
                                 load_pen = self._load_penalty(route, solution)
                                 adj = delta - bonus + load_pen
                                 options.append((adj, 'uav', r_idx, pos))
@@ -433,16 +430,6 @@ class ALNSSolver:
         if ratio <= 1.0:
             return 0.0
         return self.cfg.LAMBDA_BALANCE * 0.1 * (ratio - 1.0)
-
-    # ================================================================
-    #  Flexible Greedy Insertion (for multi-slot aggregation)
-    # ================================================================
-    def _flexible_greedy_insertion(self, solution: Solution,
-                                   extra_nodes: List[Node]) -> None:
-        """將 extra_nodes 用 greedy 方式插入現有 solution。
-        供 compare_gi_alns.py 的 multi-slot aggregation 使用。
-        """
-        self._greedy_repair(solution, extra_nodes, dispatch_window_end=None)
 
     # ================================================================
     #  Cross-Fleet Local Search（可選）
