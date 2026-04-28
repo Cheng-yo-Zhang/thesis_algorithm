@@ -24,7 +24,7 @@ class ChargingSchedulingProblem:
 
         self.depot = Node(
             id=0, x=c.DEPOT_X, y=c.DEPOT_Y,
-            demand=0, ready_time=0, due_date=c.T_TOTAL,
+            demand=0, ready_time=0, due_date=1e9,
             service_time=0, node_type='depot', status='served'
         )
 
@@ -70,28 +70,17 @@ class ChargingSchedulingProblem:
                 return demand
         return float(np.clip(c.DEMAND_MEAN, low, high))
 
-    # ==================== 需求生成 (HPP / NHPP) ====================
-    def generate_requests(self, slot_start: float, slot_number: int = 0) -> List[Node]:
-        """依 HPP 或 NHPP 生成單一排程週期的充電請求"""
+    # ==================== 需求生成 (Static Single-Batch) ====================
+    def generate_requests(self) -> List[Node]:
+        """生成 cfg.N_REQUESTS 個靜態請求 (批次於 t=0 ~ DELTA_T 期間到達)。"""
         c = self.cfg
 
-        # 超過 GENERATION_END 就不再生成新請求 (cooldown phase)
-        if c.GENERATION_END > 0 and slot_start >= c.GENERATION_END:
-            return []
-
-        r_t = c.get_arrival_rate_profile(slot_start)
-        mu_k = c.LAMBDA_BAR * r_t * c.DELTA_T
-        if c.USE_FIXED_DEMAND:
-            n_requests = c.FIXED_DEMAND_PER_SLOT
-        else:
-            n_requests = np.random.poisson(mu_k)
-
         new_nodes: List[Node] = []
-        for _ in range(n_requests):
+        for _ in range(c.N_REQUESTS):
             node_id = self._next_node_id
             self._next_node_id += 1
 
-            t_i = np.random.uniform(slot_start, slot_start + c.DELTA_T)
+            t_i = np.random.uniform(0.0, c.DELTA_T)
 
             is_urgent = np.random.random() < c.URGENT_RATIO
 
@@ -125,9 +114,7 @@ class ChargingSchedulingProblem:
                 id=node_id, x=x, y=y, demand=demand,
                 ready_time=t_i, due_date=d_i, service_time=0,
                 node_type=node_type, status='new',
-                ev_current_soc=ev_soc, original_demand=demand,
-                uav_served=False, residual_demand=demand,
-                origin_slot=slot_number
+                ev_current_soc=ev_soc,
             )
             new_nodes.append(node)
         return new_nodes
@@ -211,11 +198,10 @@ class ChargingSchedulingProblem:
                 route.is_feasible = False
                 return False
 
-        # 起始狀態: 從 release state 出發
-        start_node = route.start_position if route.start_position else self.depot
-        current_time = route.start_time
-        current_energy = route.start_energy if route.start_energy > 0 else capacity
-        prev_node = start_node
+        # 起始狀態: 全部車輛 t=0 從 depot 出發、滿能量
+        current_time = 0.0
+        current_energy = capacity
+        prev_node = self.depot
 
         setup, connect, disconnect = self._get_service_overhead(vehicle)
 
@@ -315,8 +301,7 @@ class ChargingSchedulingProblem:
         return False
 
     def _calculate_insertion_delta_dist(self, route: Route, pos: int, node: Node, dist_type: str) -> float:
-        start_for_route = route.start_position if route.start_position else self.depot
-        prev_node = start_for_route if pos == 0 else route.nodes[pos - 1]
+        prev_node = self.depot if pos == 0 else route.nodes[pos - 1]
         next_node = self.depot if pos == len(route.nodes) else route.nodes[pos]
         add_dist = (self.calculate_distance(prev_node, node, dist_type) +
                     self.calculate_distance(node, next_node, dist_type))
@@ -334,9 +319,6 @@ class ChargingSchedulingProblem:
                 return False, float('inf')  # EV 已達安全水位
             uav_total = sum(self.compute_uav_delivery(n) for n in route.nodes) + delivery
             if uav_total > capacity:
-                return False, float('inf')
-            # 已被 UAV 服務過的節點不再由 UAV 服務
-            if node.uav_served:
                 return False, float('inf')
         else:
             if not self.cfg.MCS_UNLIMITED_ENERGY and route.total_demand + node.demand > capacity:
@@ -436,22 +418,12 @@ class ChargingSchedulingProblem:
         c = self.cfg
         solution = Solution(c)
 
-        vehicle_route_map: Dict[int, Tuple[str, int]] = {}
-
         for vs in vehicle_states:
             route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            route.is_deployed = len(vs.committed_nodes) > 0
-
             if vs.vehicle_type == 'uav':
                 solution.add_uav_route(route)
-                vehicle_route_map[vs.vehicle_id] = ('uav', len(solution.uav_routes) - 1)
             else:
                 solution.add_mcs_route(route)
-                vehicle_route_map[vs.vehicle_id] = ('mcs', len(solution.mcs_routes) - 1)
-
             self.evaluate_route(route)
 
         # 排序 — 依策略決定 request 處理順序
@@ -463,8 +435,7 @@ class ChargingSchedulingProblem:
                 key=lambda n: (n.due_date, -n.demand)
             )
         elif strategy == "slack":
-            # Slack-based — 考慮空間可達性與服務時間
-            dispatch_time = (dispatch_window_end - c.DELTA_T) if dispatch_window_end else 0.0
+            # Slack-based — 考慮空間可達性與服務時間 (static: 全部車輛在 depot)
             active_positions = [vs.position for vs in vehicle_states]
             max_power = max(c.MCS_FAST_POWER, c.MCS_SLOW_POWER)
 
@@ -477,7 +448,7 @@ class ChargingSchedulingProblem:
                 else:
                     min_travel = (abs(n.x - self.depot.x) + abs(n.y - self.depot.y)) / c.MCS_SPEED
                 min_service = (n.demand / max_power) * 60.0
-                return n.due_date - (dispatch_time + min_travel + min_service)
+                return n.due_date - (min_travel + min_service)
 
             sorted_requests = sorted(active_requests, key=lambda n: (_slack(n), n.due_date))
         elif strategy == "nearest":
@@ -519,8 +490,7 @@ class ChargingSchedulingProblem:
             # --- Search UAV routes — 僅在所有 MCS 都不可行時 ---
             if (best_route_type is None
                     and node.node_type == 'urgent'
-                    and self.compute_uav_delivery(node) > 0
-                    and not node.uav_served):
+                    and self.compute_uav_delivery(node) > 0):
                 for r_idx, route in enumerate(solution.uav_routes):
                     for pos in range(len(route.nodes) + 1):
                         feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
@@ -578,23 +548,12 @@ class ChargingSchedulingProblem:
         c = self.cfg
         solution = Solution(c)
 
-        # 為每台 active vehicle 建立 route (suffix) — 與 greedy 相同
-        vehicle_route_map: Dict[int, Tuple[str, int]] = {}
-
         for vs in vehicle_states:
             route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            route.is_deployed = len(vs.committed_nodes) > 0
-
             if vs.vehicle_type == 'uav':
                 solution.add_uav_route(route)
-                vehicle_route_map[vs.vehicle_id] = ('uav', len(solution.uav_routes) - 1)
             else:
                 solution.add_mcs_route(route)
-                vehicle_route_map[vs.vehicle_id] = ('mcs', len(solution.mcs_routes) - 1)
-
             self.evaluate_route(route)
 
         # Priority-Class: urgent 先, normal 後
@@ -640,8 +599,7 @@ class ChargingSchedulingProblem:
                 # 僅當 MCS 全部 infeasible 且為 urgent 時搜尋 UAV
                 if (not options
                         and node.node_type == 'urgent'
-                        and self.compute_uav_delivery(node) > 0
-                        and not node.uav_served):
+                        and self.compute_uav_delivery(node) > 0):
                     for r_idx, route in enumerate(solution.uav_routes):
                         for pos in range(len(route.nodes) + 1):
                             feasible, delta_cost = self.incremental_insertion_check(route, pos, node)
@@ -712,11 +670,6 @@ class ChargingSchedulingProblem:
 
         for vs in vehicle_states:
             route = Route(vehicle_type=vs.vehicle_type, vehicle_id=vs.vehicle_id)
-            route.start_position = vs.position
-            route.start_time = vs.available_time
-            route.start_energy = vs.remaining_energy
-            route.is_deployed = len(vs.committed_nodes) > 0
-
             if vs.vehicle_type == 'uav':
                 solution.add_uav_route(route)
             else:
@@ -740,10 +693,8 @@ class ChargingSchedulingProblem:
         # --- Phase 3: UAV vehicles ---
         for route in solution.uav_routes:
             uav_remaining = [n for n in remaining
-                             if n.node_type == 'urgent' and self.compute_uav_delivery(n) > 0 and not n.uav_served]
-            before = len(remaining)
+                             if n.node_type == 'urgent' and self.compute_uav_delivery(n) > 0]
             self._nn_fill_route(route, uav_remaining)
-            # sync: remove from remaining what UAV took
             assigned_ids = {n.id for n in route.nodes}
             remaining = [n for n in remaining if n.id not in assigned_ids]
 
@@ -756,11 +707,8 @@ class ChargingSchedulingProblem:
     def _nn_fill_route(self, route: Route, remaining: List[Node]) -> None:
         """對單一路徑，反覆從尾端挑最近可行請求串接。"""
         while remaining:
-            # 當前位置 = 路徑最後一個 node，或 start_position
-            if route.nodes:
-                current = route.nodes[-1]
-            else:
-                current = route.start_position or self.depot
+            # 當前位置 = 路徑最後一個 node，否則 depot
+            current = route.nodes[-1] if route.nodes else self.depot
 
             # 按距離排序，找最近的可行請求
             remaining.sort(key=lambda n: self._nn_distance(current, n, route.vehicle_type))
@@ -791,17 +739,14 @@ class ChargingSchedulingProblem:
 
     def print_config(self) -> None:
         c = self.cfg
-        print("="*80)
-        print("Experiment Config")
-        print("="*80)
-        print(f"\nExperimental Variables:")
-        print(f"  Arrival process: {'HPP (constant rate)' if c.USE_HPP else 'NHPP (time-varying)'}")
-        print(f"  lambda_bar={c.LAMBDA_BAR} req/min ({c.LAMBDA_BAR * 60:.1f} req/hr)")
-        print(f"  rho={c.URGENT_RATIO}, DeltaT={c.DELTA_T}min, T={c.T_TOTAL}min")
-        if not c.USE_HPP:
-            print(f"  r(t) NHPP 24hr profile: {c.NHPP_PROFILE}")
-        print(f"\nFleet: S-MCS={c.NUM_MCS_SLOW}, F-MCS={c.NUM_MCS_FAST}, UAV={c.NUM_UAV}")
-        print(f"MCS: {c.MCS_SPEED*60:.1f}km/h, {c.MCS_CAPACITY}kWh, "
+        print("=" * 80)
+        print("Experiment Config (Static Single-Batch)")
+        print("=" * 80)
+        print(f"  N_REQUESTS = {c.N_REQUESTS}, urgent_ratio = {c.URGENT_RATIO}")
+        print(f"  Construction strategy: {c.CONSTRUCTION_STRATEGY}")
+        print(f"  Fleet: S-MCS={c.NUM_MCS_SLOW}, F-MCS={c.NUM_MCS_FAST}, UAV={c.NUM_UAV}")
+        print(f"  MCS: {c.MCS_SPEED * 60:.1f}km/h, {c.MCS_CAPACITY}kWh, "
               f"Slow={c.MCS_SLOW_POWER}kW, Fast={c.MCS_FAST_POWER}kW")
-        print(f"UAV: {c.UAV_SPEED*60:.1f}km/h, {c.UAV_DELIVERABLE_ENERGY}kWh, {c.UAV_CHARGE_POWER}kW")
-        print("="*80 + "\n")
+        print(f"  UAV: {c.UAV_SPEED * 60:.1f}km/h, {c.UAV_DELIVERABLE_ENERGY}kWh, "
+              f"{c.UAV_CHARGE_POWER}kW")
+        print("=" * 80 + "\n")

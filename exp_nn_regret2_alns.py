@@ -48,8 +48,7 @@ def make_cfg(demand: int, seed: int) -> Config:
         NUM_MCS_SLOW=NUM_MCS_SLOW,
         NUM_MCS_FAST=NUM_MCS_FAST,
         NUM_UAV=NUM_UAV,
-        FIXED_DEMAND_PER_SLOT=demand,
-        USE_FIXED_DEMAND=True,
+        N_REQUESTS=demand,
         MCS_UNLIMITED_ENERGY=True,
         ALNS_MAX_ITERATIONS=1000,
         SA_COOLING_RATE=0.9954,       # T drops to ~1% at iter 1000
@@ -60,9 +59,9 @@ def run_single(demand: int, seed: int) -> dict:
     """Run all 3 methods on a single (demand, seed) instance."""
     cfg = make_cfg(demand, seed)
 
-    # Generate instance (single static dispatch — slot 0 only, no rolling)
+    # Generate instance (single static dispatch)
     problem = ChargingSchedulingProblem(cfg)
-    requests = problem.generate_requests(slot_start=0, slot_number=0)
+    requests = problem.generate_requests()
     problem.setup_nodes(requests)
     fleet = initialize_fleet(cfg, problem.depot)
 

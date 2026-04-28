@@ -72,8 +72,7 @@ def generate_static_requests(problem: ChargingSchedulingProblem, n: int,
             id=node_id, x=x, y=y, demand=demand,
             ready_time=t_i, due_date=d_i, service_time=0,
             node_type=node_type, status='new',
-            ev_current_soc=ev_soc, original_demand=demand,
-            uav_served=False, residual_demand=demand, origin_slot=1,
+            ev_current_soc=ev_soc,
         )
         nodes.append(node)
     return nodes

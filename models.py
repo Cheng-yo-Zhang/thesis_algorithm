@@ -1,6 +1,6 @@
 import numpy as np
-from dataclasses import dataclass, field
-from typing import List, Set, Optional
+from dataclasses import dataclass
+from typing import List, Set
 
 from config import Config
 
@@ -8,7 +8,7 @@ from config import Config
 # ==================== 節點類別 ====================
 @dataclass
 class Node:
-    """節點資料結構"""
+    """節點資料結構 (static single-batch)"""
     id: int
     x: float
     y: float
@@ -17,32 +17,19 @@ class Node:
     due_date: float         # d_i: 偏好完成時間 (deadline)
     service_time: float     # 充電時間 (由 demand/power 計算，動態決定)
     node_type: str = 'normal'  # 'depot', 'normal', 'urgent'
-    status: str = 'new'        # Request state: new/backlog/assigned/in_service/served/missed
+    status: str = 'new'        # 'new' | 'assigned' | 'served'
     ev_current_soc: float = 0.0        # EV 當前 SOC (0.0-1.0)
-    original_demand: float = 0.0       # 原始完整需求 (kWh)
-    uav_served: bool = False            # 是否已被 UAV 服務過
-    residual_demand: float = 0.0       # UAV 服務後的剩餘需求 (kWh)
-    origin_slot: int = 0               # 請求產生於哪個 slot (用於測量窗口統計)
-    served_by_vehicle_id: int = -1     # 服務此請求的車輛 ID
-    served_by_vehicle_type: str = ''   # 服務此請求的車輛類型
 
 
 # ==================== 車輛狀態 ====================
 @dataclass
 class VehicleState:
-    """
-    車輛 rolling-horizon 狀態
-
-    在每個決策時點，已開始執行的路徑前綴為 frozen-prefix，
-    車輛以 release state 表示其最早可重新投入派遣的狀態。
-    """
+    """車輛狀態 (static single-batch — 全部於 t=0 在 depot 待命)"""
     vehicle_id: int
     vehicle_type: str           # 'mcs_slow', 'mcs_fast', 'uav'
-    position: Node              # release_node: 完成當前承諾任務後所在節點
-    available_time: float       # release_time: 最早可再接受新任務的時間
-    remaining_energy: float     # release_energy: 剩餘能量 (kWh)
-    committed_nodes: List = field(default_factory=list)  # frozen-prefix 中已承諾的節點
-    committed_departures: List = field(default_factory=list)  # 每個 committed node 的預計 departure time
+    position: Node              # 起始節點 (depot)
+    available_time: float       # 起始時刻 (固定為 0)
+    remaining_energy: float     # 起始能量 (kWh)
 
 
 # ==================== 路徑容器類別 ====================
@@ -64,12 +51,6 @@ class Route:
         self.total_mcs_waiting_time: float = 0.0
         self.total_demand: float = 0.0
         self.is_feasible: bool = True
-
-        # Rolling-horizon: route 的起始狀態 (由 VehicleState 提供)
-        self.start_position: Optional[Node] = None   # release_node
-        self.start_time: float = 0.0                   # release_time
-        self.start_energy: float = 0.0                 # release_energy
-        self.is_deployed: bool = False                  # 該車輛是否已部署 (有 committed_nodes)
 
     def __len__(self) -> int:
         return len(self.nodes)
@@ -110,9 +91,6 @@ class Route:
         new_route.total_mcs_waiting_time = self.total_mcs_waiting_time
         new_route.total_demand = self.total_demand
         new_route.is_feasible = self.is_feasible
-        new_route.start_position = self.start_position
-        new_route.start_time = self.start_time
-        new_route.start_energy = self.start_energy
         return new_route
 
     def __repr__(self) -> str:

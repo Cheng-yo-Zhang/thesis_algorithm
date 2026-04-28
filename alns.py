@@ -167,10 +167,7 @@ class ALNSSolver:
     # ================================================================
     def _get_removable_nodes(self, solution: Solution
                              ) -> List[Tuple[Node, str, int, int]]:
-        """回傳 [(node, route_type, route_idx, node_pos), ...]
-        Route.nodes 只含 suffix，committed_nodes 在 VehicleState 中，
-        因此所有 route.nodes 都可移除。
-        """
+        """回傳 [(node, route_type, route_idx, node_pos), ...]"""
         result = []
         for r_idx, r in enumerate(solution.mcs_routes):
             for n_pos, node in enumerate(r.nodes):
@@ -324,8 +321,7 @@ class ALNSSolver:
 
             if (best is None
                     and node.node_type == 'urgent'
-                    and self.problem.compute_uav_delivery(node) > 0
-                    and not node.uav_served):
+                    and self.problem.compute_uav_delivery(node) > 0):
                 for r_idx, route in enumerate(solution.uav_routes):
                     for pos in range(len(route.nodes) + 1):
                         feasible, delta = self.problem.incremental_insertion_check(
@@ -376,8 +372,7 @@ class ALNSSolver:
 
                 if (not options
                         and node.node_type == 'urgent'
-                        and self.problem.compute_uav_delivery(node) > 0
-                        and not node.uav_served):
+                        and self.problem.compute_uav_delivery(node) > 0):
                     for r_idx, route in enumerate(solution.uav_routes):
                         for pos in range(len(route.nodes) + 1):
                             feasible, delta = self.problem.incremental_insertion_check(

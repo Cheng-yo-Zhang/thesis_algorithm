@@ -126,13 +126,8 @@ thesis_algorithm/
 ├── problem.py
 ├── alns.py
 ├── simulation.py
-├── experiment.py        (或 experiments/ 資料夾)
+├── experiment.py
 ├── visualization.py
-├── tests/
-│   ├── test_evaluator.py
-│   ├── test_constructors.py
-│   └── test_alns.py
-├── data/
 ├── docs/
 │   ├── problem_definition.md
 │   ├── greedy_insertion_logic.md
@@ -141,14 +136,6 @@ thesis_algorithm/
 │   ├── milp_formulation.md
 │   └── code_architecture.md
 └── results/
-    ├── fleet_vs_demand/
-    ├── coverage_vs_demand/
-    ├── distance_breakdown/
-    ├── algorithm_comparison/
-    ├── uav_vs_tw/
-    ├── uav_vs_urgent_ratio/
-    ├── route_comparison/
-    └── fleet_sizing/
 ```
 
 | 動作 | 細節 |

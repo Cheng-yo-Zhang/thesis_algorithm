@@ -78,16 +78,16 @@ def run_single_experiment(n_demand, seed=42):
     # 因此 CONSTRUCTION_STRATEGY 僅作為 greedy 的排序鍵；保留 "regret2" 以維持原本
     # "due_date 唯一鍵" 行為 (與舊版 fallback 排序完全一致)。
     cfg = Config(
-        RANDOM_SEED=seed, USE_FIXED_DEMAND=True,
-        FIXED_DEMAND_PER_SLOT=n_demand,
+        RANDOM_SEED=seed,
+        N_REQUESTS=n_demand,
         CONSTRUCTION_STRATEGY="regret2",
         NUM_MCS_SLOW=3, NUM_MCS_FAST=2, NUM_UAV=1,
-        MCS_UNLIMITED_ENERGY=True, ALNS_MAX_ITERATIONS=5000, T_TOTAL=2880,
+        MCS_UNLIMITED_ENERGY=True, ALNS_MAX_ITERATIONS=5000,
     )
 
     problem = ChargingSchedulingProblem(cfg)
     fleet = initialize_fleet(cfg, problem.depot)
-    requests = problem.generate_requests(slot_start=0, slot_number=1)
+    requests = problem.generate_requests()
     problem.setup_nodes(requests)
     dwe = cfg.DELTA_T
 
