@@ -168,8 +168,6 @@ def main():
 
     ax.set_xlabel('Number of Requests (N)', fontsize=12)
     ax.set_ylabel('Coverage Rate (%)', fontsize=12)
-    ax.set_title('Coverage Rate vs Demand\n[Fleet: 3 SLOW + 2 FAST + 1 UAV]',
-                 fontsize=13, fontweight='bold')
     ax.set_xticks(demand_levels)
     ax.set_ylim(0, 105)
     ax.legend(fontsize=11, loc='lower left')
@@ -192,9 +190,6 @@ def main():
 
     ax.set_xlabel('Number of Requests (N)', fontsize=12)
     ax.set_ylabel('Last Completion Time (min)', fontsize=12)
-    ax.set_title('Last Completion Time vs Demand\n'
-                 '[Fleet: 3 SLOW + 2 FAST + 1 UAV]',
-                 fontsize=13, fontweight='bold')
     ax.set_xticks(demand_levels)
     ax.legend(fontsize=11, loc='upper left')
     ax.grid(True, alpha=0.3)
@@ -243,11 +238,6 @@ def main():
 
         ax.set_xlabel('Last Completion Time (min)', fontsize=12)
         ax.set_ylabel('Served Customers', fontsize=12)
-        ax.set_title(f'Throughput vs Completion Time  '
-                     f'[N = {target_n_for_curve}, '
-                     f'Fleet: 3 SLOW + 2 FAST + 1 UAV]\n'
-                     f'Upper-left = better',
-                     fontsize=13, fontweight='bold')
         ax.set_yticks(milestones)
         ax.set_ylim(milestones[0] - 5, milestones[-1] + 5)
         ax.legend(fontsize=11, loc='lower right')
