@@ -134,6 +134,7 @@ def main():
 
     all_metrics = {name: [] for name in algo_names}
     solutions_at_target = None
+    problem_at_target = None
 
     for n_demand in demand_levels:
         t0 = time.time()
@@ -145,6 +146,7 @@ def main():
 
         if n_demand == target_n_for_curve:
             solutions_at_target = solutions
+            problem_at_target = problem
 
         for name in algo_names:
             m = get_metrics(solutions[name])
@@ -200,12 +202,13 @@ def main():
     print(f"  [Saved] {path}")
 
     # ==============================================================
-    #  圖 B2: Served Count vs Last Completion Time (固定 N = 60)
-    #  y 軸里程碑 = {10, 20, 30, 40, 50, 60}
-    #  x 軸 = 該演算法服務到第 k 個客戶的時間
+    #  圖 B2: Cumulative Served Customers vs Time (固定 N = 60)
+    #  x 軸里程碑 = {100, 200, 300, 400, 500, 600} min
+    #  y 軸 = 該時間點為止累計完成的客戶數
     #  每個演算法一條折線；upper-left = better
     # ==============================================================
-    milestones = [10, 20, 30, 40, 50, 60]
+    from bisect import bisect_right
+    time_milestones = [100, 200, 300, 400, 500, 600]
     if solutions_at_target is None:
         print(f"  [Warning] No solutions captured at N={target_n_for_curve}; "
               f"skipping efficiency plot.")
@@ -219,31 +222,107 @@ def main():
             completion_times.sort()
             served = len(completion_times)
 
-            xs, ys = [], []
-            for k in milestones:
-                if k <= served:
-                    xs.append(completion_times[k - 1])
-                    ys.append(k)
-            # 加上實際終點 (若不重複於最後一個里程碑)
-            if served > 0 and (not ys or ys[-1] != served):
-                xs.append(completion_times[-1])
-                ys.append(served)
-            if not xs:
+            if not completion_times:
                 continue
+            last_dep = completion_times[-1]
+
+            # 取樣至 last_dep；超過則切斷，並補上實際終點
+            xs, ys = [], []
+            for t in time_milestones:
+                if t <= last_dep:
+                    xs.append(t)
+                    ys.append(bisect_right(completion_times, t))
+                else:
+                    break
+            if not xs or xs[-1] < last_dep:
+                xs.append(last_dep)
+                ys.append(served)
 
             ax.plot(xs, ys,
                     marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
                     linewidth=2, markersize=8,
-                    label=f"{name} (served {served})", zorder=5)
+                    label=f"{name} (finished at {last_dep:.0f} min, served {served})",
+                    zorder=5)
 
-        ax.set_xlabel('Last Completion Time (min)', fontsize=12)
-        ax.set_ylabel('Served Customers', fontsize=12)
-        ax.set_yticks(milestones)
-        ax.set_ylim(milestones[0] - 5, milestones[-1] + 5)
+        ax.set_xlabel('Time (min)', fontsize=12)
+        ax.set_ylabel('Cumulative Served Customers', fontsize=12)
+        ax.set_xticks(time_milestones)
+        ax.set_ylim(0, target_n_for_curve + 5)
         ax.legend(fontsize=11, loc='lower right')
         ax.grid(True, alpha=0.3)
         fig.tight_layout()
         path = out_dir / "fig_served_vs_completion_time.png"
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  [Saved] {path}")
+
+    # ==============================================================
+    #  圖 B3: Fleet Distance vs Cumulative Served Customers (固定 N = 60)
+    #  x 軸 = 累計服務客戶數, y 軸 = 車隊累積行駛距離 (km)
+    #  取樣固定在 x 軸 (served milestones); lower-right = better
+    # ==============================================================
+    served_milestones = [5, 10, 15, 20, 25, 30, 35, 40]
+    if solutions_at_target is None or problem_at_target is None:
+        print(f"  [Warning] No solutions/problem captured at N={target_n_for_curve}; "
+              f"skipping distance-efficiency plot.")
+    else:
+        depot = problem_at_target.depot
+        fig, ax = plt.subplots(figsize=(9, 5.5))
+        for name in algo_names:
+            sol = solutions_at_target[name]
+
+            # 收集每個服務事件的 (時間, hop 距離)
+            events = []
+            for r in sol.get_all_routes():
+                if not r.nodes:
+                    continue
+                prev = depot
+                vt = r.vehicle_type
+                for i, node in enumerate(r.nodes):
+                    dx = abs(prev.x - node.x)
+                    dy = abs(prev.y - node.y)
+                    hop = (dx*dx + dy*dy) ** 0.5 if vt == 'uav' else dx + dy
+                    events.append((r.departure_times[i], hop))
+                    prev = node
+            events.sort(key=lambda e: e[0])
+
+            if not events:
+                continue
+
+            cum_dist_list = []
+            cum_d = 0.0
+            for _, hop in events:
+                cum_d += hop
+                cum_dist_list.append(cum_d)
+
+            total_dist = cum_dist_list[-1]
+            served = len(cum_dist_list)
+
+            # 在 x 軸 (服務數) 取樣: 第 s 位客戶被服務時 fleet 累積距離 = cum_dist_list[s-1]
+            xs, ys = [], []
+            for s in served_milestones:
+                if s <= served:
+                    xs.append(s)
+                    ys.append(cum_dist_list[s - 1])
+                else:
+                    break
+            if not xs or xs[-1] < served:
+                xs.append(served)
+                ys.append(total_dist)
+
+            ax.plot(xs, ys,
+                    marker=ALGO_MARKERS[name], color=ALGO_COLORS[name],
+                    linewidth=2, markersize=8,
+                    label=f"{name} (finished at {total_dist:.0f} km, served {served})",
+                    zorder=5)
+
+        ax.set_xlabel('Cumulative Served Customers', fontsize=12)
+        ax.set_ylabel('Cumulative Fleet Distance (km)', fontsize=12)
+        ax.set_xticks(served_milestones)
+        ax.legend(fontsize=11, loc='upper left')
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        path = out_dir / "fig_served_vs_distance.png"
         fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  [Saved] {path}")
