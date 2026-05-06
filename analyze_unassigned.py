@@ -125,11 +125,11 @@ def plot_unassigned_reason(per_algo_subcat: dict) -> None:
     bar_c = ax_left.bar(x_pos, c_vals, width,
                         color=COLOR_C_SLOW_TIGHT, edgecolor='black',
                         linewidth=0.6,
-                        label='C: TW Slow-tight (Fast/UAV feasible)')
+                        label='TW Slow-tight (Fast/UAV feasible)')
     bar_b = ax_left.bar(x_pos, b_vals, width, bottom=c_vals,
                         color=COLOR_B_UAV_ONLY, edgecolor='black',
                         linewidth=0.6,
-                        label='B: TW MCS-tight (UAV-only feasible)')
+                        label='TW MCS-tight (UAV-only feasible)')
 
     # 每段中央標數字
     for i, (c, b) in enumerate(zip(c_vals, b_vals)):
@@ -163,7 +163,7 @@ def plot_unassigned_reason(per_algo_subcat: dict) -> None:
     d_vals = np.array([per_algo_subcat[a]['D_resource'] for a in algos])
     ax_right.bar(x_pos, d_vals, width,
                  color=COLOR_D_RESOURCE, edgecolor='black', linewidth=0.6,
-                 label='D: Resource shortage (any vehicle feasible)')
+                 label='Resource shortage (any vehicle feasible)')
 
     y_top_right = max(d_vals.max(), 1) * 1.15
     for i, d in enumerate(d_vals):
@@ -183,12 +183,6 @@ def plot_unassigned_reason(per_algo_subcat: dict) -> None:
     ax_right.legend(loc='upper right', fontsize=9, framealpha=0.95)
     ax_right.grid(True, axis='y', alpha=0.3)
     ax_right.set_axisbelow(True)
-
-    fig.suptitle(
-        f'Unassigned-Urgent Diagnosis  '
-        f'(N={N_REQUESTS}, seed={SEED}, fleet 3 SLOW + 2 FAST + 1 UAV)',
-        fontsize=13.5, fontweight='bold', y=1.00,
-    )
 
     out_path = OUTPUT_DIR / "fig_unassigned_reason.png"
     fig.savefig(out_path, dpi=200, bbox_inches="tight")

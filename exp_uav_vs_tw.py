@@ -8,15 +8,17 @@ Fixed:
     construction  = regret2 + ALNS (1000 iter)
     seed          = 42
 
-Sweep:
-    URGENT_TW ∈ [15, 20, 30, 45, 60, 90, 120, 180]   (min, deterministic)
-    NUM_UAV   ∈ [0, 1]                               → two lines
+Sweep (two grids — single combined run, two figures):
+    URGENT_TW (fine) ∈ [10, 15, ..., 60]   (min, 5-min interval)
+    URGENT_TW (wide) ∈ [10, 20, ..., 120]  (min, 10-min interval)
+    NUM_UAV          ∈ [0, 1, 2, 3]        → four lines
 
 Each TW value sets BOTH URGENT_TW_MIN and URGENT_TW_MAX to the same value,
 so every urgent request gets exactly that time window (no sampling noise).
 
 Output:
-    results/uav_vs_tw/urgent_miss_rate.png
+    results/uav_vs_tw/urgent_miss_rate_60min.png   (fine grid)
+    results/uav_vs_tw/urgent_miss_rate_120min.png  (wide grid)
 """
 
 import time
@@ -35,7 +37,9 @@ from exp_fleet_vs_demand import generate_static_requests, solve_once
 
 
 # === Experiment Parameters ===
-TW_VALUES = [10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+TW_VALUES_FINE = list(range(10, 65, 5))                          # 10, 15, ..., 60
+TW_VALUES_WIDE = list(range(10, 130, 10))                        # 10, 20, ..., 120
+TW_VALUES_ALL = sorted(set(TW_VALUES_FINE) | set(TW_VALUES_WIDE))  # union — sweep once
 NUM_UAV_LIST = [0, 1, 2, 3]
 SEED = 42
 N_REQUESTS = 20
@@ -107,7 +111,7 @@ def run_sweep() -> list:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     rows = []
 
-    total_runs = len(TW_VALUES) * len(NUM_UAV_LIST)
+    total_runs = len(TW_VALUES_ALL) * len(NUM_UAV_LIST)
     run_idx = 0
     t_start = time.time()
 
@@ -115,7 +119,9 @@ def run_sweep() -> list:
     print("Urgent Miss Rate vs Urgent Time Window")
     print(f"  n_requests={N_REQUESTS}  fleet=(slow={NUM_MCS_SLOW}, fast={NUM_MCS_FAST})")
     print(f"  urgent_ratio={URGENT_RATIO}")
-    print(f"  TW grid   = {TW_VALUES}")
+    print(f"  TW grid (fine) = {TW_VALUES_FINE}")
+    print(f"  TW grid (wide) = {TW_VALUES_WIDE}")
+    print(f"  TW grid (all)  = {TW_VALUES_ALL}")
     print(f"  num_uav   = {NUM_UAV_LIST}")
     print(f"  seed      = {SEED}")
     print(f"  ALNS iter = {ALNS_ITER}")
@@ -123,7 +129,7 @@ def run_sweep() -> list:
     print("=" * 72)
 
     for num_uav in NUM_UAV_LIST:
-        for tw in TW_VALUES:
+        for tw in TW_VALUES_ALL:
             run_idx += 1
             row = run_one(tw, num_uav, SEED)
             rows.append(row)
@@ -142,10 +148,12 @@ def run_sweep() -> list:
     return rows
 
 
-def plot(rows: list) -> None:
+def plot(rows: list, tw_grid: list, filename: str) -> None:
+    tw_set = set(tw_grid)
     by_uav = {k: [] for k in NUM_UAV_LIST}
     for r in rows:
-        by_uav[r["num_uav"]].append(r)
+        if r["tw"] in tw_set:
+            by_uav[r["num_uav"]].append(r)
     for k in by_uav:
         by_uav[k].sort(key=lambda r: r["tw"])
 
@@ -171,13 +179,13 @@ def plot(rows: list) -> None:
     ax.set_xlabel("Urgent Time Window (min)", fontsize=12)
     ax.set_ylabel("Urgent Miss Rate", fontsize=12)
     ax.set_ylim(bottom=0)
-    ax.set_xticks(TW_VALUES)
+    ax.set_xticks(tw_grid)
     ax.grid(True, linestyle=":", alpha=0.6, which="major")
     ax.legend(loc="upper right", frameon=True)
     ax.set_title("UAV Value vs Problem Hardness (Time Window)", fontsize=13)
 
     fig.tight_layout()
-    png_path = OUTPUT_DIR / "urgent_miss_rate.png"
+    png_path = OUTPUT_DIR / filename
     fig.savefig(png_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"Figure saved: {png_path}")
@@ -185,4 +193,5 @@ def plot(rows: list) -> None:
 
 if __name__ == "__main__":
     rows = run_sweep()
-    plot(rows)
+    plot(rows, TW_VALUES_FINE, "urgent_miss_rate_60min.png")
+    plot(rows, TW_VALUES_WIDE, "urgent_miss_rate_120min.png")
