@@ -33,7 +33,7 @@ from exp_fleet_vs_demand import generate_static_requests, solve_once
 # === Experiment Parameters ===
 URGENT_RATIOS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
 NUM_UAV_LIST = [0, 1, 2, 3]
-SEED = 42
+SEED = 43
 N_REQUESTS = 20
 NUM_MCS_SLOW = 3
 NUM_MCS_FAST = 2
@@ -50,6 +50,8 @@ def run_one(rho: float, num_uav: int, seed: int) -> dict:
     cfg = Config(
         RANDOM_SEED=seed,
         URGENT_RATIO=rho,
+        URGENT_TW_MIN=30.0,
+        URGENT_TW_MAX=30.0,
         NUM_MCS_SLOW=NUM_MCS_SLOW,
         NUM_MCS_FAST=NUM_MCS_FAST,
         NUM_UAV=num_uav,
@@ -209,6 +211,7 @@ def _line_plot(by_uav: dict, key: str, ylabel: str, title: str, name: str,
     ax.set_xlim(0.05, 0.95)
     ax.set_ylim(bottom=ylim_bottom, top=ylim_top)
     ax.set_xticks(URGENT_RATIOS)
+    ax.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     ax.grid(True, linestyle=":", alpha=1.0)
     ax.legend(loc="upper left", frameon=True)
     ax.set_title(title, fontsize=13)
