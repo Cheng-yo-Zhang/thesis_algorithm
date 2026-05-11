@@ -103,86 +103,55 @@ def classify_subreason(flags: dict) -> str:
 # ================================================================
 ALGO_ORDER = ('NN', 'Greedy', 'ALNS')
 
-# B/C 兩個 TW-tight 的子類別共用紅色系（深淺區分嚴格度）
-COLOR_C_SLOW_TIGHT = '#F4A582'   # 淺紅 — TW 對 Slow 太緊 (Fast/UAV 仍可)
-COLOR_B_UAV_ONLY   = '#B2182B'   # 深紅 — TW 緊到只 UAV 可救
-COLOR_D_RESOURCE   = '#4393C3'   # 藍   — 純資源不足
+# 兩大類顏色
+COLOR_TW_TIGHT   = '#F4A582'   # 紅 — TW-tight (B + C 合併)
+COLOR_D_RESOURCE = '#4393C3'   # 藍 — Resource shortage (D)
 
 
 def plot_unassigned_reason(per_algo_subcat: dict) -> None:
-    """並排雙圖：左 = TW-tight (B+C 堆疊)，右 = Resource-shortage (D)。"""
-    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(12, 5.5),
-                                            gridspec_kw={'wspace': 0.25})
+    """單圖：每個演算法一根堆疊長條，TW-tight (下) + Resource-shortage (上)。"""
+    fig, ax = plt.subplots(figsize=(7, 5.5))
 
     algos = list(ALGO_ORDER)
     x_pos = np.arange(len(algos))
     width = 0.55
 
-    # === 左圖: TW-tight (C 在下、B 在上) =========================
-    c_vals = np.array([per_algo_subcat[a]['C_slow_tight'] for a in algos])
-    b_vals = np.array([per_algo_subcat[a]['B_uav_only']   for a in algos])
-
-    bar_c = ax_left.bar(x_pos, c_vals, width,
-                        color=COLOR_C_SLOW_TIGHT, edgecolor='black',
-                        linewidth=0.6,
-                        label='TW Slow-tight (Fast/UAV feasible)')
-    bar_b = ax_left.bar(x_pos, b_vals, width, bottom=c_vals,
-                        color=COLOR_B_UAV_ONLY, edgecolor='black',
-                        linewidth=0.6,
-                        label='TW MCS-tight (UAV-only feasible)')
-
-    # 每段中央標數字
-    for i, (c, b) in enumerate(zip(c_vals, b_vals)):
-        if c > 0:
-            ax_left.text(x_pos[i], c / 2, f'{c}',
-                         ha='center', va='center', fontsize=11,
-                         color='black', fontweight='bold')
-        if b > 0:
-            ax_left.text(x_pos[i], c + b / 2, f'{b}',
-                         ha='center', va='center', fontsize=11,
-                         color='white', fontweight='bold')
-
-    # 頂端標總數
-    totals_left = c_vals + b_vals
-    y_top_left = max(totals_left.max(), 1) * 1.15
-    for i, t in enumerate(totals_left):
-        ax_left.text(x_pos[i], t + y_top_left * 0.02, f'{t}',
-                     ha='center', va='bottom', fontsize=11, fontweight='bold')
-
-    ax_left.set_xticks(x_pos)
-    ax_left.set_xticklabels(algos, fontsize=11)
-    ax_left.set_ylabel('Unassigned Urgent Customers', fontsize=12)
-    ax_left.set_title('(a) TW-tight Failures',
-                      fontsize=13, fontweight='bold')
-    ax_left.set_ylim(0, y_top_left)
-    ax_left.legend(loc='upper right', fontsize=9, framealpha=0.95)
-    ax_left.grid(True, axis='y', alpha=0.3)
-    ax_left.set_axisbelow(True)
-
-    # === 右圖: Resource shortage (D) =============================
+    tw_vals = np.array([per_algo_subcat[a]['B_uav_only'] +
+                        per_algo_subcat[a]['C_slow_tight'] for a in algos])
     d_vals = np.array([per_algo_subcat[a]['D_resource'] for a in algos])
-    ax_right.bar(x_pos, d_vals, width,
-                 color=COLOR_D_RESOURCE, edgecolor='black', linewidth=0.6,
-                 label='Resource shortage (any vehicle feasible)')
 
-    y_top_right = max(d_vals.max(), 1) * 1.15
-    for i, d in enumerate(d_vals):
+    ax.bar(x_pos, tw_vals, width,
+           color=COLOR_TW_TIGHT, edgecolor='black', linewidth=0.6,
+           label='TW-tight')
+    ax.bar(x_pos, d_vals, width, bottom=tw_vals,
+           color=COLOR_D_RESOURCE, edgecolor='black', linewidth=0.6,
+           label='Resource shortage')
+
+    for i, (tw, d) in enumerate(zip(tw_vals, d_vals)):
+        if tw > 0:
+            ax.text(x_pos[i], tw / 2, f'{tw}',
+                    ha='center', va='center', fontsize=11,
+                    color='black', fontweight='bold')
         if d > 0:
-            ax_right.text(x_pos[i], d / 2, f'{d}',
-                          ha='center', va='center', fontsize=11,
-                          color='white', fontweight='bold')
-        ax_right.text(x_pos[i], d + y_top_right * 0.02, f'{d}',
-                      ha='center', va='bottom', fontsize=11, fontweight='bold')
+            ax.text(x_pos[i], tw + d / 2, f'{d}',
+                    ha='center', va='center', fontsize=11,
+                    color='white', fontweight='bold')
 
-    ax_right.set_xticks(x_pos)
-    ax_right.set_xticklabels(algos, fontsize=11)
-    ax_right.set_ylabel('Unassigned Urgent Customers', fontsize=12)
-    ax_right.set_title('(b) Resource-shortage Failures',
-                       fontsize=13, fontweight='bold')
-    ax_right.set_ylim(0, y_top_right)
-    ax_right.legend(loc='upper right', fontsize=9, framealpha=0.95)
-    ax_right.grid(True, axis='y', alpha=0.3)
-    ax_right.set_axisbelow(True)
+    totals = tw_vals + d_vals
+    y_top = max(totals.max(), 1) * 1.15
+    for i, t in enumerate(totals):
+        ax.text(x_pos[i], t + y_top * 0.02, f'{t}',
+                ha='center', va='bottom', fontsize=11, fontweight='bold')
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(algos, fontsize=11)
+    ax.set_ylabel('Unassigned Urgent Customers', fontsize=12)
+    ax.set_title('Unassigned-Reason Breakdown',
+                 fontsize=13, fontweight='bold')
+    ax.set_ylim(0, y_top)
+    ax.legend(loc='upper right', fontsize=10, framealpha=0.95)
+    ax.grid(True, axis='y', alpha=0.3)
+    ax.set_axisbelow(True)
 
     out_path = OUTPUT_DIR / "fig_unassigned_reason.png"
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
