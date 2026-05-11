@@ -169,7 +169,7 @@ def main():
                 linewidth=2, markersize=8, label=name, zorder=5)
 
     ax.set_xlabel('Number of Requests (N)', fontsize=12)
-    ax.set_ylabel('Coverage Rate (%)', fontsize=12)
+    ax.set_ylabel('Service Rate (%)', fontsize=12)
     ax.set_xticks(demand_levels)
     ax.set_ylim(0, 105)
     ax.legend(fontsize=11, loc='lower left')
