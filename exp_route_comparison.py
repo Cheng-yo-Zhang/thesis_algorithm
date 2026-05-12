@@ -203,12 +203,12 @@ def main():
 
     # ==============================================================
     #  圖 B2: Cumulative Served Customers vs Time (固定 N = 60)
-    #  x 軸里程碑 = {100, 200, 300, 400, 500, 600} min
+    #  x 軸里程碑 = {0, 50, 100, ..., 600} min (每 50 min)
     #  y 軸 = 該時間點為止累計完成的客戶數
     #  每個演算法一條折線；upper-left = better
     # ==============================================================
     from bisect import bisect_right
-    time_milestones = [100, 200, 300, 400, 500, 600]
+    time_milestones = list(range(0, 601, 50))
     if solutions_at_target is None:
         print(f"  [Warning] No solutions captured at N={target_n_for_curve}; "
               f"skipping efficiency plot.")
