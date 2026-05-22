@@ -29,14 +29,14 @@ from simulation import initialize_fleet
 #  演算法顏色
 # ================================================================
 ALGO_COLORS = {
-    'Greedy':   '#E53935',
+    'TCGI':   '#E53935',
     'NN':       '#FF9800',
-    'ALNS':     '#1E88E5',
+    'TCGI-ALNS':     '#1E88E5',
 }
 ALGO_MARKERS = {
-    'Greedy':   'o',
+    'TCGI':   'o',
     'NN':       '^',
-    'ALNS':     's',
+    'TCGI-ALNS':     's',
 }
 
 
@@ -111,8 +111,8 @@ def run_single_experiment(n_demand, seed=42):
 
     return {
         'NN': nn_sol,
-        'Greedy': greedy_sol,
-        'ALNS': alns_sol,
+        'TCGI': greedy_sol,
+        'TCGI-ALNS': alns_sol,
     }, problem
 
 
@@ -120,13 +120,14 @@ def run_single_experiment(n_demand, seed=42):
 #  主程式
 # ================================================================
 def main():
-    demand_levels = [10, 20, 30, 40, 50, 60, 70, 80]
+    demand_levels = [10, 60]
     target_n_for_curve = 60
     seed = 42
     out_dir = Path("results") / "route_comparison"
     out_dir.mkdir(parents=True, exist_ok=True)
-    algo_names = ['NN', 'Greedy', 'ALNS']
+    algo_names = ['NN', 'TCGI', 'TCGI-ALNS']
 
+    total_t0 = time.time()
     print("=" * 70)
     print("  NN vs Greedy vs ALNS")
     print("  Fleet: 3 SLOW + 2 FAST + 1 UAV")
@@ -344,6 +345,12 @@ def main():
         print(f"  {n:>3} | {' | '.join(parts)}")
     print(f"  {'='*86}")
     print(f"\n  All figures saved to {out_dir}")
+
+    total_elapsed = time.time() - total_t0
+    h = int(total_elapsed // 3600)
+    m = int((total_elapsed % 3600) // 60)
+    s = total_elapsed % 60
+    print(f"\n  Total runtime: {total_elapsed:.1f}s ({h}h {m}m {s:.1f}s)")
 
 
 if __name__ == "__main__":

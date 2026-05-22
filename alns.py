@@ -225,7 +225,7 @@ class ALNSSolver:
             saving = route.total_time - candidate.total_time
             costs.append((saving, node, rtype, r_idx, n_pos))
 
-        costs.sort(reverse=True)
+        costs.sort(key=lambda x: x[0], reverse=True)
 
         selected = []
         remaining = list(costs)
