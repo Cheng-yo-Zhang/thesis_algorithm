@@ -6,7 +6,8 @@
       "Bash(venv/Scripts/python.exe exp_nn_regret2_alns.py)",
       "Bash(tee /tmp/exp_run.log)",
       "Bash(dir C:UsersLouisthesis_algorithm *)",
-      "PowerShell(Get-ChildItem -Path 'C:\\\\Users\\\\Louis\\\\thesis_algorithm' -Force | Where-Object { $_.Name -notin @\\('venv','.venv','.git'\\) } | Format-Table Mode, LastWriteTime, Name -AutoSize)"
+      "PowerShell(Get-ChildItem -Path 'C:\\\\Users\\\\Louis\\\\thesis_algorithm' -Force | Where-Object { $_.Name -notin @\\('venv','.venv','.git'\\) } | Format-Table Mode, LastWriteTime, Name -AutoSize)",
+      "Bash(powershell *)"
     ]
   }
 }
